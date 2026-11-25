@@ -1,0 +1,176 @@
+diff --git a/coo-lite/android/app/src/main/java/net/tina/mobile/EcosystemAccountActivity.java b/coo-lite/android/app/src/main/java/net/tina/mobile/EcosystemAccountActivity.java
+index 4bf91b1..793ce9f 100644
+--- a/coo-lite/android/app/src/main/java/net/tina/mobile/EcosystemAccountActivity.java
++++ b/coo-lite/android/app/src/main/java/net/tina/mobile/EcosystemAccountActivity.java
+@@ -23,6 +23,12 @@ public final class EcosystemAccountActivity extends Activity {
+         TextView title=text("账号与连接",24);body.addView(title);
+         Button ffa=new Button(this);ffa.setText("FFA hub 登录 · 星邮 bot 频道");
+         ffa.setOnClickListener(v->startActivity(new Intent(this,net.tina.mobile.starpost.StarpostActivity.class)));body.addView(ffa);
++        Button register=new Button(this);register.setText("注册 FFA Hub 账号");
++        register.setOnClickListener(v->{
++            try {startActivity(new Intent(Intent.ACTION_VIEW,android.net.Uri.parse("https://ffahub.net/?screen=register")));}
++            catch(android.content.ActivityNotFoundException error){hint.setText("请在浏览器打开 ffahub.net 注册。");}
++        });
++        body.addView(register);
+         Button advanced=new Button(this);advanced.setText("高级：原 CooDock 独立运行会话授权");advanced.setOnClickListener(v->startActivity(new Intent(this,FfaHubActivity.class)));body.addView(advanced);
+         body.addView(text("主界面对话与内嵌星邮共用同一业务账号、bot 和聊天记录；由星邮服务器中转。工作台连接独立保留。",15));
+         try {
+diff --git a/coo-lite/android/app/src/main/java/net/tina/mobile/starpost/SocialScreens.kt b/coo-lite/android/app/src/main/java/net/tina/mobile/starpost/SocialScreens.kt
+index 0c33f56..af248b6 100644
+--- a/coo-lite/android/app/src/main/java/net/tina/mobile/starpost/SocialScreens.kt
++++ b/coo-lite/android/app/src/main/java/net/tina/mobile/starpost/SocialScreens.kt
+@@ -4,6 +4,7 @@ package net.tina.mobile.starpost
+ import android.os.Build
+ import androidx.compose.foundation.clickable
+ import androidx.compose.foundation.layout.*
++import androidx.compose.foundation.selection.toggleable
+ import androidx.compose.foundation.lazy.LazyColumn
+ import androidx.compose.foundation.lazy.items
+ import androidx.compose.foundation.lazy.rememberLazyListState
+@@ -29,6 +30,7 @@ import java.time.Instant
+     "owner","socialHistory","history","blockedHistory"->ChatScreen(ui,s)
+     "safety"->SafetyScreen(ui,s)
+     "settings"->SettingsScreen(ui,s)
++    "quickBind"->QuickBindScreen(ui,s)
+     "approvals"->ApprovalsScreen(ui,s)
+     "teen"->TeenScreen(ui,s)
+     "profile"->ProfileScreen(ui,s)
+@@ -154,6 +156,41 @@ internal fun conversationName(data:JSONObject,id:String,kind:String):String {
+     record?.let{ForwardRecordDialog(ui,it){record=null}}
+ }
+ 
++@Composable private fun QuickBindScreen(ui: UiActions, s: ClientState) {
++    val humanId = s.data.str("humanId")
++    val bots = s.data.rows("bots")
++    var selected by remember(humanId, bots.map { it.str("botId") }) { mutableStateOf(emptySet<String>()) }
++    val ready = !s.loading && !s.working && s.error.isBlank() && humanId.isNotEmpty()
++    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 12.dp),
++        verticalArrangement = Arrangement.spacedBy(10.dp)) {
++        if (s.loading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
++        if (ready) Text(if (bots.isEmpty()) "当前没有可绑定的 bot。你主管的 bot 需要先有星邮账号。"
++            else "选择要绑定到当前星邮号 $humanId 的 bot。")
++        LazyColumn(Modifier.weight(1f)) {
++            items(bots, key = { it.str("botId") }) { bot ->
++                val id = bot.str("botId")
++                val checked = id in selected
++                Row(Modifier.fillMaxWidth().toggleable(value = checked, enabled = ready,
++                    role = androidx.compose.ui.semantics.Role.Checkbox,
++                    onValueChange = { selected = if (it) selected + id else selected - id })
++                    .padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
++                    Checkbox(checked = checked, onCheckedChange = null, enabled = ready)
++                    Spacer(Modifier.width(12.dp))
++                    Text("${bot.str("nickname").ifBlank { "未设置昵称" }} · $id")
++                }
++            }
++        }
++        if (bots.isNotEmpty()) Button(enabled = ready && selected.isNotEmpty(), modifier = Modifier.fillMaxWidth(), onClick = {
++            ui.vm.perform("account.bindHubBots", obj("humanId" to humanId, "botIds" to JSONArray(selected.toList()))) { result ->
++                selected = emptySet()
++                val count = result.optInt("boundCount")
++                ui.vm.notice(if (count > 0) "已绑定 $count 个 bot 到 $humanId" else "所选 bot 已绑定到当前账号")
++            }
++        }) { Text(if (selected.isEmpty()) "绑定所选 bot" else "绑定所选 bot（${selected.size}）") }
++        TextButton(onClick = { ui.vm.refresh() }, enabled = !s.loading && !s.working) { Text("重新检查") }
++    }
++}
++
+ @Composable private fun SettingsScreen(ui:UiActions,s:ClientState){ContentList(ui){
+     Entry("举报进度与黑名单","查看人工审核结果、管理员通知与拉黑账号"){ui.go("safety",kind="blocks")}
+     val account=s.account
+@@ -173,9 +210,39 @@ internal fun conversationName(data:JSONObject,id:String,kind:String):String {
+     BackgroundSettings(ui)
+     Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text("壁纸动态配色",style=MaterialTheme.typography.titleMedium);Text(if(Build.VERSION.SDK_INT>=31)"让界面呼应系统 Monet 色彩" else "Android 12 及以上可用",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)};Switch(s.dynamicColor,ui.vm::dynamic,enabled=Build.VERSION.SDK_INT>=31)}
+     SectionTitle("我的 bot","绑定多个 bot，在这里切换。")
++    if(account.optBoolean("canQuickBind")) FilledTonalButton(onClick={ui.go("quickBind")}){Text("一键绑定 bot")}
+     OwnerNotificationSetting(ui, s)
+-    account.rows("bots").forEach{bot->val id=bot.str("botId");key(id){Entry(contactName(bot,id),"${bot.str("nickname",id)} · $id",trailing=if(id==account.str("botId"))"使用中" else "切换",avatarId=id,avatarVersion=bot.str("avatarVersion"),accountTitle=bot.str("accountTitle"),accountTitleStyle=bot.optJSONObject("accountTitleStyle")){ui.vm.perform("account.select",obj("botId" to id))};RemarkButton(ui,id,bot.str("remark"),bot.str("nickname",id));AvatarEditor(ui,bot.str("avatarVersion"),id,bot.str("nickname",id));PokeTextEditor(ui,bot.str("pokeText"),id,bot.str("nickname",id))}}
+-    FilledTonalButton(onClick={ui.form("绑定我的 bot",listOf(TextFieldSpec("botId","星邮 Bot ID"),TextFieldSpec("credential","本机凭据（token）",secret=true)),"填写星邮配置或凭据文件里的 token 字段（通常为 64 位），也可粘贴含 token 的完整 JSON。这里不是 Hub 主体 ID 或恢复凭据。尚无 Hub 管理者的旧 bot，绑定后同步到 Hub 的“共同管理的 bot”。首次绑定会自动选中。"){values->ui.vm.perform("account.bind",obj("botId" to values["botId"],"credential" to values["credential"]),done={result->ui.pendingBoundBot=result.str("boundBotId",values["botId"]?.trim()?:"")})}}){Glyph("link");Spacer(Modifier.width(8.dp));Text("绑定新的 bot")}
++    account.rows("bots").forEach { bot ->
++        val id = bot.str("botId")
++        val name = contactName(bot, id)
++        key(id) {
++            Entry(name, "${bot.str("nickname", id)} · $id", trailing = if (id == account.str("botId")) "使用中" else "切换",
++                avatarId = id, avatarVersion = bot.str("avatarVersion"), accountTitle = bot.str("accountTitle"),
++                accountTitleStyle = bot.optJSONObject("accountTitleStyle")) { ui.vm.perform("account.select", obj("botId" to id)) }
++            RemarkButton(ui, id, bot.str("remark"), bot.str("nickname", id))
++            AvatarEditor(ui, bot.str("avatarVersion"), id, bot.str("nickname", id))
++            PokeTextEditor(ui, bot.str("pokeText"), id, bot.str("nickname", id))
++            val bindingId = bot.str("bindingId")
++            if (bindingId.isNotEmpty()) {
++                TextButton(enabled = !s.working, onClick = {
++                    ui.confirm("解绑 bot", "解除「$name · $id」和星邮号 ${account.str("humanId")} 的绑定？解绑后，此星邮号将停止接收该 bot 的专属频道消息。聊天记录和 FFA Hub 管理关系会保留，可手动重新绑定。") {
++                        ui.vm.perform("account.unbind", obj("botId" to id, "bindingId" to bindingId)) { ui.vm.notice("已解绑 bot") }
++                    }
++                }) { Text("解绑 bot", color = MaterialTheme.colorScheme.error) }
++            }
++        }
++    }
++    account.rows("pendingHubBindings").forEach { bot ->
++        val botId = bot.str("botId")
++        SectionTitle("选择星邮号", "绑定 ${bot.str("nickname")} · $botId")
++        bot.rows("choices").forEach { person ->
++            val id = person.str("humanId")
++            TextButton(onClick = { ui.confirm("确认归属", "将 bot $botId 绑定到星邮号 $id？") {
++                ui.vm.perform("account.bindHub", obj("botId" to botId, "humanId" to id))
++            } }) { Text("${person.str("nickname")} · $id") }
++        }
++    }
++    FilledTonalButton(onClick={ui.form("绑定我的 bot",listOf(TextFieldSpec("botId","星邮 Bot ID"),TextFieldSpec("credential","星邮凭据或一次性绑定码",secret=true)),"在扩展首页点「绑定凭据」复制。Hub 绑定码由主要管理者在目标星邮号中使用，十分钟内有效；旧账号可使用原 token，也可粘贴含 token 的完整 JSON。这里不是 Hub 主体 ID 或恢复凭据。尚无 Hub 管理者的旧 bot，绑定后同步到 Hub 的“共同管理的 bot”。首次绑定会自动选中。"){values->ui.vm.perform("account.bind",obj("botId" to values["botId"],"credential" to values["credential"]),done={result->ui.pendingBoundBot=result.str("boundBotId",values["botId"]?.trim()?:"")})}}){Glyph("link");Spacer(Modifier.width(8.dp));Text("绑定新的 bot")}
+     Entry("社交审批","好友与混合群的待办请求"){ui.go("approvals")}
+     if(account.str("botId").isNotEmpty()){Entry("联系当前 bot","进入你的专属频道"){ui.go("owner")};Entry("青少年模式","管理当前 bot 的好友和入群请求"){ui.go("teen")}}
+     Text("登录有效期至 ${time(Instant.ofEpochMilli(s.expiresAt).toString())}",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+diff --git a/coo-lite/android/app/src/main/java/net/tina/mobile/starpost/StarpostApp.kt b/coo-lite/android/app/src/main/java/net/tina/mobile/starpost/StarpostApp.kt
+index 5d2dcd6..9f1db07 100644
+--- a/coo-lite/android/app/src/main/java/net/tina/mobile/starpost/StarpostApp.kt
++++ b/coo-lite/android/app/src/main/java/net/tina/mobile/starpost/StarpostApp.kt
+@@ -35,7 +35,7 @@ import java.time.Instant
+ import java.time.ZoneId
+ import java.time.format.DateTimeFormatter
+ 
+-internal val pageNames=mapOf("capsules" to "时间胶囊","capsule" to "来自过去的自己","newCapsule" to "写给未来的我","social" to "消息","contacts" to "联系人","square" to "发现","settings" to "我","owner" to "我的 bot","chats" to "Bot 会话","feed" to "动态","botFeed" to "Bot 动态","botPost" to "Bot 动态详情","bottles" to "漂流瓶","bottle" to "漂流瓶详情","newPost" to "发动态","throwBottle" to "投漂流瓶","replyBottle" to "回复漂流瓶","post" to "动态详情","search" to "寻找新朋友","groupCreate" to "发起群聊","invite" to "邀请好友","approvals" to "社交审批","teen" to "青少年模式","profile" to "个人资料","gameRecord" to "游戏战绩","games" to "游戏广场","botGames" to "Bot 对局","game" to "对局记录","gameInvite" to "邀请参加游戏","humanReservation" to "游戏预约","humanRoom" to "游戏聊天室","schedule" to "预约狼人杀","featured" to "精彩对局","featuredSummary" to "每日精彩对局","socialHistory" to "聊天","history" to "Bot 聊天记录")
++internal val pageNames=mapOf("quickBind" to "一键绑定 bot","capsules" to "时间胶囊","capsule" to "来自过去的自己","newCapsule" to "写给未来的我","social" to "消息","contacts" to "联系人","square" to "发现","settings" to "我","owner" to "我的 bot","chats" to "Bot 会话","feed" to "动态","botFeed" to "Bot 动态","botPost" to "Bot 动态详情","bottles" to "漂流瓶","bottle" to "漂流瓶详情","newPost" to "发动态","throwBottle" to "投漂流瓶","replyBottle" to "回复漂流瓶","post" to "动态详情","search" to "寻找新朋友","groupCreate" to "发起群聊","invite" to "邀请好友","approvals" to "社交审批","teen" to "青少年模式","profile" to "个人资料","gameRecord" to "游戏战绩","games" to "游戏广场","botGames" to "Bot 对局","game" to "对局记录","gameInvite" to "邀请参加游戏","humanReservation" to "游戏预约","humanRoom" to "游戏聊天室","schedule" to "预约狼人杀","featured" to "精彩对局","featuredSummary" to "每日精彩对局","socialHistory" to "聊天","history" to "Bot 聊天记录")
+ internal val rootPages=listOf("social","contacts","square","settings")
+ internal fun time(at:String)=runCatching { DateTimeFormatter.ofPattern("MM-dd HH:mm").withZone(ZoneId.of("Asia/Shanghai")).format(Instant.parse(at)) }.getOrDefault(at)
+ internal data class TextFieldSpec(val key:String,val label:String,val initial:String="",val secret:Boolean=false)
+diff --git a/coo-lite/android/app/src/main/java/net/tina/mobile/starpost/StarpostClient.kt b/coo-lite/android/app/src/main/java/net/tina/mobile/starpost/StarpostClient.kt
+index 67a77ea..5c2367d 100644
+--- a/coo-lite/android/app/src/main/java/net/tina/mobile/starpost/StarpostClient.kt
++++ b/coo-lite/android/app/src/main/java/net/tina/mobile/starpost/StarpostClient.kt
+@@ -289,17 +289,19 @@ internal class StarpostClient(app: Application): AndroidViewModel(app) {
+     fun cancelHubLogin(){if(state.value.working)return;hubPending=null;hubFlows.clear();mutable.update{it.copy(hubWaiting=false,error="")}}
+     fun completeHubLogin(flowId:String?=null){
+         val pending=hubPending?:return
++        val epoch=sessionEpoch
+         if(state.value.working||state.value.signedIn||flowId!=null&&flowId!=pending.str("flowId"))return
+         if(pending.optLong("expiresAt")<=System.currentTimeMillis()){cancelHubLogin();notice("FFA 登录已过期，请重新发起");return}
+         mutable.update{it.copy(working=true,error="")}
+         viewModelScope.launch{try{
+             val result=request("/mobile/hub/poll",obj("flowId" to pending.str("flowId"),"verifier" to pending.str("verifier")),false)
++            requireCurrent(epoch)
+             if(result.str("status")=="pending")return@launch
+             require(result.str("status")=="complete"){"登录结果无效"}
+             token=result.getString("accessToken");sessionEpoch++
+             mutable.update{it.copy(expiresAt=result.getLong("expiresAt"),account=result,signedIn=true,hubWaiting=false)}
+             saveSession();hubPending=null;hubFlows.clear();start()
+-        }catch(e:Exception){if(e is ApiError && e.status in listOf(400,403,409,410)){hubPending=null;hubFlows.clear();mutable.update{it.copy(hubWaiting=false)}};handle(e,false)}finally{mutable.update{it.copy(working=false)}}}
++        }catch(e:Exception){if(epoch!=sessionEpoch||!sessions.isCurrent())return@launch;if(e is ApiError && e.status in listOf(400,403,409,410)){hubPending=null;hubFlows.clear();mutable.update{it.copy(hubWaiting=false)}};handle(e,false)}finally{mutable.update{it.copy(working=false)}}}
+     }
+     fun login(mode: String,email: String,password: String,nickname: String,challenge: String,code: String,customServer: String,done: ()->Unit) {
+         if(state.value.working)return
+@@ -351,6 +353,7 @@ internal class StarpostClient(app: Application): AndroidViewModel(app) {
+                 "socialHistory","blockedHistory"->rpc("social.history",obj("kind" to route.kind,"target" to route.id,"limit" to 30,"before" to route.before))
+                 "safety"->rpc(if(route.kind=="reports")"safety.reports" else "safety.blocks",cursor).put("safety",rpc("safety.status"))
+                 "settings"->rpc("account.info").also { if(epoch==sessionEpoch)mutable.update { s->s.copy(account=it) } }
++                "quickBind"->rpc("account.scanHubBots")
+                 "approvals"->rpc("account.approvals")
+                 "teen"->rpc("teen.status")
+                 "owner"->rpc("owner.history",cursor)
+@@ -402,7 +405,7 @@ internal class StarpostClient(app: Application): AndroidViewModel(app) {
+                 if(epoch!=sessionEpoch)return@launch
+                 if(action=="logout"){expire();return@launch}
+                 done(result)
+-                if(action in listOf("account.select","account.bind","account.botAvatar","account.botPokeText","account.contactRemark","owner.address","human.profile","social.profile.update","social.profile.equip")){val info=rpc("account.info");requireCurrent(epoch);mutable.update{it.copy(account=info)};saveSession()}
++                if(action in listOf("account.select","account.bind","account.bindHub","account.bindHubBots","account.unbind","account.botAvatar","account.botPokeText","account.contactRemark","owner.address","human.profile","social.profile.update","social.profile.equip")){val info=rpc("account.info");requireCurrent(epoch);mutable.update{it.copy(account=info)};saveSession()}
+                 if(action=="account.contactRemark"){val contacts=rpc("social.overview");if(epoch==sessionEpoch)mutable.update{it.copy(social=contacts)}}
+                 if(result.optBoolean("pendingApproval"))notice("已提交，等待相关用户审批")
+                 else if(result.optBoolean("waitingForOthers"))notice("已批准，等待其他 bot 主人审批")

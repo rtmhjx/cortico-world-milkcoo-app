@@ -102,6 +102,14 @@ export class PublicRelayConnector {
     return result;
   }
 
+  connectFfaInstallation(installed) {
+    if (!DEVICE_TOKEN.test(this.profile?.token ?? '')) throw Error('请先设置 CooDock 公网中转连接。');
+    return this.post('/relay/private-auth/connect', {
+      proof:installed.accessToken, installation_id:installed.installationId,
+      device_id:installed.deviceId, role:'connector'
+    },this.profile.token);
+  }
+
   async worldChat(operation, body, signal) {
     if (!WORLD_CHAT_OPERATIONS.has(operation)) throw new Error('WORLD_CHAT_INVALID_OPERATION');
     if (!DEVICE_TOKEN.test(this.profile?.token ?? '')) throw new Error('WORLD_CHAT_UNBOUND');

@@ -10,6 +10,7 @@ import { readPetResource, writePetPreferences } from './pet-resources.mjs';
 import { DesktopScreenSampler } from './desktop-screen.mjs';
 import { ModelControl } from './model-control.mjs';
 import { MobilePairing, pairingPage } from './pairing.mjs';
+import { FfaWorldPairing, ffaPanel } from './ffa-world.mjs';
 import { fetchEasyTierAsset } from './easytier-assets.mjs';
 import { BottleBridge } from './bottle-bridge.mjs';
 import { requestPetInterrupt } from './pet-control.mjs';
@@ -214,10 +215,12 @@ export class TinaMobileWorld {
         [worldSetting + '.petPort']: { type: 'integer', title: '本机桌宠资源端口', description: '默认 7797；多开 Coo 时请填写此 Coo 的桌宠实际端口。', minimum: 1, maximum: 65535, 'x-hot': false },
         [worldSetting + '.consolePort']: { type: 'integer', title: 'Coo 控制台端口', description: '手机修改模型时访问同一 Coo 的本机控制台；默认 17788。', minimum: 1, maximum: 65535, 'x-hot': false },
         [worldSetting + '.consoleUiUrl']: { type: 'string', title: '手机上的完整 Coo 控制台地址', description: '填写手机可访问的完整 HTTP(S) 界面地址，保留域名与路径；留空时在手机设置。不从手机通道地址推算。', 'x-hot': true },
+        [worldSetting + '.ffaWorkerCredentialsFile']: { type: 'string', title: 'FFA 独立会话 worker 凭据路径', description: '选填。使用当前部署用户专用目录下的新文件绝对路径。配对后在本机面板中生成。', 'x-hot': false },
         [worldSetting + '.tokenSecret']: { type: 'string', title: '接入密钥的名称', description: '默认 MILKCOO_APP_TOKEN；这里填写名称，不填写密钥内容。', 'x-hot': false },
       } } }],
     links: [ ...(this.address() ? [{ label: '手机安装与连接指南（安卓 / iOS）', href: `http://127.0.0.1:${this.address().port}/_coo/devices` }] : []),
        { label: '前往公网主页', href: PUBLIC_HOME },
+       ...(this.address() ? [{ label: 'FFA Hub · 配对运行端', href: `http://127.0.0.1:${this.address().port}/_coo/ffa` }] : []),
        ...(this.address() ? [{ label: '填写公网密钥并生成专属 APK', href: `http://127.0.0.1:${this.address().port}/_coo/relay-apk` }] : []),
        ...(this.address() ? [{ label: '世界聊天 · Bot 收听', href: `http://127.0.0.1:${this.address().port}/_coo/world-chat` }] : []),
        ...(this.personalApk && this.address() ? [{ label: '下载安卓 APK · 主机版（直连专属）', href: this.downloadUrl() },
@@ -448,6 +451,7 @@ export class TinaMobileWorld {
     this.tokenHash = createHash('sha256').update(`Bearer ${token}`).digest();
     this.workbenchBridge = new WorkbenchBridge(this.context, token);
     this.panelNonce = randomBytes(24).toString('base64url');
+    this.ffaPairing = new FfaWorldPairing(this.context, { connect: saved => this.publicRelay.connectFfaInstallation(saved) });
     const dataDir = join(this.context.dataDir, LEGACY_WORLD_ID);
     mkdirSync(dataDir, { recursive: true });
     this.store = new MobileStore(join(dataDir, 'mobile.sqlite'));
@@ -508,6 +512,7 @@ export class TinaMobileWorld {
   }
   async stop() {
     const server = this.server; this.server = null;
+    this.ffaPairing?.stop();
     const relayClosed = this.publicRelay?.stop(); this.publicRelay = null;
     this.dispatchRequested = false;
     clearInterval(this.timer);
@@ -561,6 +566,29 @@ export class TinaMobileWorld {
   async handle(req, res) {
     if (!this.server || !this.store) throw new MobileError('MOBILE_STOPPED', 503);
     const url = new URL(req.url, 'http://localhost');
+    if (url.pathname === '/_coo/ffa' && ['GET','POST'].includes(req.method)) {
+      if (!localControlRequest(req,this.address().port)) throw new MobileError('LOCAL_CONTROL_ONLY',403);
+      let message = '', status = 200;
+      if (req.method === 'POST') {
+        if (req.headers.origin !== `http://${req.headers.host.toLowerCase()}` ||
+            !req.headers['content-type']?.startsWith('application/x-www-form-urlencoded')) throw new MobileError('PANEL_UNAUTHORIZED',403);
+        const parts = [];
+        let size = 0;
+        for await (const part of req) {
+          size += part.byteLength;
+          if (size > 2048) throw new MobileError('BODY_TOO_LARGE',413);
+          parts.push(part);
+        }
+        const form = new URLSearchParams(Buffer.concat(parts).toString('utf8'));
+        if (form.get('nonce') !== this.panelNonce) throw new MobileError('PANEL_UNAUTHORIZED',403);
+        try { message = await this.ffaPairing.take(form.get('action')); }
+        catch (error) { status = 400; message = /[\u4e00-\u9fff]/.test(error.message) ? error.message : '配对操作失败，请稍后重试。'; }
+      }
+      res.writeHead(status, {'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store',
+        'Content-Security-Policy':"default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        'Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff'});
+      res.end(ffaPanel(this.ffaPairing.view(),this.panelNonce,message)); return;
+    }
     if (url.pathname === '/_coo/world-chat' && ['GET', 'POST'].includes(req.method)) {
       if (!localControlRequest(req, this.address().port)) throw new MobileError('LOCAL_CONTROL_ONLY', 403);
       const relay = this.publicRelay;

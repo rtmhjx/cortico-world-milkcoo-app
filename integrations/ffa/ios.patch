@@ -1,0 +1,370 @@
+diff --git a/coo-ios/奶Coo/ContentView.swift b/coo-ios/奶Coo/ContentView.swift
+index 6ff9010..fcdd7d1 100644
+--- a/coo-ios/奶Coo/ContentView.swift
++++ b/coo-ios/奶Coo/ContentView.swift
+@@ -3,11 +3,14 @@ import PhotosUI
+ import UIKit
+ import UniformTypeIdentifiers
+ import Combine
++import CryptoKit
++import Security
++import AVFoundation
+ 
+ private enum Page: String, CaseIterable, Hashable {
+-    case chat, events, worlds, alerts, camera, model, connection, diagnostics, guide, about
+-    var title: String { switch self { case .chat: return "对话"; case .events: return "事件"; case .worlds: return "World 扩展"; case .alerts: return "World 提醒"; case .camera: return "摄像头观察"; case .model: return "模型与思考"; case .connection: return "连接 Coo"; case .diagnostics: return "诊断日志"; case .guide: return "使用指南"; case .about: return "关于" } }
+-    var symbol: String { switch self { case .chat: return "bubble.left.and.bubble.right"; case .events: return "clock.arrow.circlepath"; case .worlds: return "square.stack.3d.up"; case .alerts: return "bell.badge"; case .camera: return "camera.viewfinder"; case .model: return "slider.horizontal.3"; case .connection: return "link"; case .diagnostics: return "doc.text.magnifyingglass"; case .guide: return "book.closed"; case .about: return "info.circle" } }
++    case chat, events, worlds, alerts, camera, model, connection, ffa, diagnostics, guide, about
++    var title: String { switch self { case .chat: return "对话"; case .events: return "事件"; case .worlds: return "World 扩展"; case .alerts: return "World 提醒"; case .camera: return "摄像头观察"; case .model: return "模型与思考"; case .connection: return "连接 Coo"; case .ffa: return "FFA Hub · 我的 bot"; case .diagnostics: return "诊断日志"; case .guide: return "使用指南"; case .about: return "关于" } }
++    var symbol: String { switch self { case .chat: return "bubble.left.and.bubble.right"; case .events: return "clock.arrow.circlepath"; case .worlds: return "square.stack.3d.up"; case .alerts: return "bell.badge"; case .camera: return "camera.viewfinder"; case .model: return "slider.horizontal.3"; case .connection: return "link"; case .ffa: return "person.crop.circle"; case .diagnostics: return "doc.text.magnifyingglass"; case .guide: return "book.closed"; case .about: return "info.circle" } }
+     var guideKey: String? {
+         switch self {
+         case .chat: return "chat"
+@@ -17,7 +20,7 @@ private enum Page: String, CaseIterable, Hashable {
+         case .model: return "model"
+         case .connection: return "connection"
+         case .diagnostics: return "diagnostics"
+-        case .guide, .about: return nil
++        case .guide, .about, .ffa: return nil
+         }
+     }
+ }
+@@ -51,6 +54,7 @@ struct ContentView: View {
+                     case .camera: CameraObservationView()
+                     case .model: ModelControlView()
+                     case .connection: ConnectionView()
++                    case .ffa: FfaBotChannelView()
+                     case .diagnostics: DiagnosticsView()
+                     case .guide: GuideHomeView(select: { guideChapter = $0 })
+                     case .about: AboutView()
+@@ -301,3 +305,330 @@ private struct AboutView: View {
+         }.navigationTitle("关于").navigationBarTitleDisplayMode(.inline)
+     }
+ }
++
++private struct FfaBotChannelView: View {
++    @Environment(\.openURL) private var openURL
++    @StateObject private var channel = FfaBotChannel()
++    @State private var draft = ""
++    @State private var attachment: PhotosPickerItem?
++
++    var body: some View {
++        List {
++            if let message = channel.message { Text(message).foregroundStyle(.secondary) }
++            if channel.busy { ProgressView() }
++            if let account = channel.account {
++                Section("当前星邮号") {
++                    Text(account["nickname"] as? String ?? account["humanId"] as? String ?? "")
++                    ForEach(channel.bots, id: \.id) { bot in
++                        Button {
++                            attachment = nil
++                            Task { await channel.select(bot.id) }
++                        } label: {
++                            Label(bot.label, systemImage: bot.id == channel.activeBot ? "checkmark.circle" : "person.crop.circle")
++                        }.disabled(channel.busy || bot.id == channel.activeBot)
++                    }
++                    if channel.bots.isEmpty {
++                        Link("在星邮绑定 bot", destination: URL(string: "https://starpost.com.cn/app/settings")!)
++                    }
++                    Button("退出此端登录", role: .destructive) {
++                        draft = ""
++                        attachment = nil
++                        Task { await channel.signOut() }
++                    }.disabled(channel.busy)
++                }
++                if channel.activeBot != nil {
++                    Section("专属频道") {
++                        Button("刷新记录") { Task { await channel.refresh() } }.disabled(channel.busy)
++                        if channel.hasEarlier {
++                            Button("更早记录") { Task { await channel.earlier() } }.disabled(channel.busy)
++                        }
++                        ForEach(channel.messages, id: \.id) { item in
++                            VStack(alignment: .leading, spacing: 6) {
++                                Text(item.sender).font(.caption).foregroundStyle(.secondary)
++                                if !item.text.isEmpty { Text(item.text) }
++                                if let image = item.image { Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 240) }
++                                if item.hasAudio {
++                                    Button("播放语音") { Task { await channel.play(item.id) } }.disabled(channel.busy)
++                                }
++                            }
++                        }
++                        TextField("给 bot 写点什么", text: $draft)
++                        PhotosPicker(selection: $attachment, matching: .images) {
++                            Label(attachment == nil ? "附上图片" : "已选择图片", systemImage: "photo")
++                        }.disabled(channel.busy)
++                        if attachment != nil {
++                            Button("移除图片") { attachment = nil }.disabled(channel.busy)
++                        }
++                        Button("发送") {
++                            let text = draft, photo = attachment
++                            Task {
++                                if await channel.send(text, photo: photo) {
++                                    if draft == text { draft = "" }
++                                    if attachment == photo { attachment = nil }
++                                }
++                            }
++                        }.disabled(channel.busy || (draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachment == nil))
++                    }
++                }
++            } else {
++                Section {
++                    if let link = channel.authorizationURL {
++                        Button("继续浏览器授权") { openURL(link) }.disabled(channel.busy)
++                        Button("完成登录") { Task { await channel.complete() } }.disabled(channel.busy)
++                        Button("取消") { channel.cancel() }.disabled(channel.busy)
++                    } else {
++                        Button("使用 FFA Hub 登录") {
++                            Task { if let url = await channel.begin() { openURL(url) } }
++                        }.disabled(channel.busy)
++                    }
++                    Link("注册 FFA Hub 账号", destination: URL(string: "https://ffahub.net/?screen=register")!)
++                } footer: {
++                    Text("日常对话与星邮共用专属频道。连接 Coo 和本机记录仍从原页面访问。")
++                }
++            }
++        }.navigationTitle("FFA Hub · 我的 bot").task { await channel.refresh() }.onDisappear { channel.stopAudio() }
++    }
++}
++
++@MainActor private final class FfaBotChannel: ObservableObject {
++    private struct Pending {
++        let id: String
++        let verifier: String
++        let url: URL
++        let expires: Double
++    }
++    struct Bot { let id: String; let label: String }
++    struct Message { let id: String; let sender: String; let text: String; let image: UIImage?; let hasAudio: Bool }
++    private struct Failure: LocalizedError {
++        let text: String
++        var errorDescription: String? { text }
++    }
++    private enum Endpoint {
++        static let origin = URL(string: "https://starpost.com.cn")!
++        static let officialHosts = ["starpost.com.cn", "8.148.13.225"]
++        static let service = "net.tina.coodock.starpost"
++        static let key = "shared-bot-channel"
++    }
++
++    @Published private(set) var account: [String: Any]?
++    @Published private(set) var messages: [Message] = []
++    @Published private var nextBefore: Int?
++    @Published private(set) var busy = false
++    @Published private(set) var message: String?
++    @Published private var pending: Pending?
++    private var player: AVAudioPlayer?
++    var hasEarlier: Bool { nextBefore != nil }
++    private var token: String?
++    private var expires: Double = 0
++    private let client = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
++    private final class NoRedirect: NSObject, URLSessionTaskDelegate {
++        func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
++                        newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
++            completionHandler(nil)
++        }
++    }
++    private static var keySpec: [String: Any] {
++        [kSecClass as String:kSecClassGenericPassword, kSecAttrService as String:Endpoint.service, kSecAttrAccount as String:Endpoint.key]
++    }
++    var authorizationURL: URL? { pending?.url }
++    var activeBot: String? {
++        guard let value = account?["botId"] as? String, !value.isEmpty else { return nil }
++        return value
++    }
++    var bots: [Bot] {
++        (account?["bots"] as? [[String: Any]] ?? []).compactMap {
++            guard let id = $0["botId"] as? String else { return nil }
++            let name = $0["nickname"] as? String ?? "bot"
++            return Bot(id:id,label:name + " · " + id)
++        }
++    }
++
++    init() {
++        var spec = Self.keySpec
++        spec[kSecReturnData as String] = true
++        spec[kSecMatchLimit as String] = kSecMatchLimitOne
++        var value: CFTypeRef?
++        if SecItemCopyMatching(spec as CFDictionary,&value) == errSecSuccess,
++           let data = value as? Data, let saved = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
++            expires = saved["expiresAt"] as? Double ?? 0
++            if expires > now { token = saved["accessToken"] as? String }
++        }
++    }
++    private var now: Double { Date().timeIntervalSince1970 * 1000 }
++    private func save(token: String, expires: Double) throws {
++        let data = try JSONSerialization.data(withJSONObject:["accessToken":token,"expiresAt":expires])
++        let attrs = [kSecValueData as String:data]
++        var code = SecItemUpdate(Self.keySpec as CFDictionary, attrs as CFDictionary)
++        if code == errSecItemNotFound {
++            var spec = Self.keySpec
++            spec[kSecValueData as String] = data
++            spec[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
++            code = SecItemAdd(spec as CFDictionary,nil)
++        }
++        guard code == errSecSuccess else { throw Failure(text:"钥匙串保存失败，请解锁设备后重试。") }
++        self.token = token
++        self.expires = expires
++    }
++    private func clear() {
++        SecItemDelete(Self.keySpec as CFDictionary)
++        token = nil; expires = 0; pending = nil; account = nil; messages = []; nextBefore = nil
++        stopAudio()
++    }
++    private func post(_ path: String, data: [String: Any], withToken: Bool = false) async throws -> [String: Any] {
++        var request = URLRequest(url: URL(string:path,relativeTo:Endpoint.origin)!.absoluteURL, timeoutInterval:20)
++        request.httpMethod = "POST"
++        request.setValue("application/json",forHTTPHeaderField:"Content-Type")
++        if withToken {
++            guard let token, expires > now else { clear(); throw Failure(text:"请重新登录 FFA Hub。") }
++            request.setValue("Bearer " + token,forHTTPHeaderField:"Authorization")
++        }
++        request.httpBody = try JSONSerialization.data(withJSONObject:data)
++        let (body,response) = try await client.data(for:request)
++        guard let http = response as? HTTPURLResponse else { throw Failure(text:"星邮暂不可用。") }
++        if http.statusCode == 401 && withToken { clear() }
++        let json = (try? JSONSerialization.jsonObject(with:body)) as? [String: Any]
++        guard http.statusCode == 200, json?["ok"] as? Bool == true, let value = json?["result"] as? [String: Any] else {
++            throw Failure(text:json?["message"] as? String ?? json?["error"] as? String ?? "星邮请求失败，请重试。")
++        }
++        return value
++    }
++    private func rpc(_ action: String,_ args: [String: Any] = [:]) async throws -> [String: Any] {
++        try await post("/mobile/rpc",data:["action":action,"args":args],withToken:true)
++    }
++    private func base64url(_ bytes: Data) -> String {
++        bytes.base64EncodedString().replacingOccurrences(of:"+",with:"-")
++            .replacingOccurrences(of:"/",with:"_").replacingOccurrences(of:"=",with:"")
++    }
++    func begin() async -> URL? {
++        guard !busy, token == nil else { return nil }
++        busy = true; message = nil
++        defer { busy = false }
++        do {
++            var bytes = Data(count:32)
++            let code = bytes.withUnsafeMutableBytes { (buffer: UnsafeMutableRawBufferPointer) in
++                SecRandomCopyBytes(kSecRandomDefault,buffer.count,buffer.baseAddress!)
++            }
++            guard code == errSecSuccess else { throw Failure(text:"无法生成登录凭据。") }
++            let verifier = base64url(bytes)
++            let challenge = base64url(Data(SHA256.hash(data:Data(verifier.utf8))))
++            let out = try await post("/mobile/hub/start",data:["challenge":challenge,"project":"coodock"])
++            guard let id = out["flowId"] as? String, let href = out["authorizationUrl"] as? String,
++                  let url = URL(string:href), url.scheme == "https", let host = url.host,
++                  Endpoint.officialHosts.contains(host),
++                  url.user == nil, url.password == nil, url.port == nil || url.port == 443,
++                  url.path == "/web/hub/start", let expiry = out["expiresAt"] as? Double, expiry > now
++            else { throw Failure(text:"登录地址无效。") }
++            pending = Pending(id:id,verifier:verifier,url:url,expires:expiry)
++            return url
++        } catch { message = error.localizedDescription; return nil }
++    }
++    func cancel() { pending = nil; message = nil }
++    func complete() async {
++        guard !busy, let flow = pending else { return }
++        guard flow.expires > now else { cancel(); message = "登录已过期，请重新发起。"; return }
++        busy = true; message = nil
++        defer { busy = false }
++        do {
++            let out = try await post("/mobile/hub/poll",data:["flowId":flow.id,"verifier":flow.verifier])
++            if out["status"] as? String == "pending" { message = "请在浏览器完成授权后再试。"; return }
++            guard out["status"] as? String == "complete", let token = out["accessToken"] as? String,
++                  let expiry = out["expiresAt"] as? Double, expiry > now else { throw Failure(text:"登录结果无效。") }
++            try save(token:token,expires:expiry)
++            pending = nil
++            try await load()
++        } catch { message = error.localizedDescription }
++    }
++    func refresh() async {
++        guard !busy, token != nil else { return }
++        busy = true; message = nil
++        defer { busy = false }
++        do { try await load() } catch { message = error.localizedDescription }
++    }
++    private func load() async throws {
++        let current = try await rpc("account.info")
++        guard current["sourceProject"] as? String == "coodock" else {
++            clear()
++            throw Failure(text:"请通过 CooDock 的 FFA Hub 入口重新授权。")
++        }
++        account = current
++        messages = []
++        nextBefore = nil
++        guard activeBot != nil else { return }
++        let result = try await history()
++        messages = result.messages
++        nextBefore = result.next
++    }
++    private func history(before: Int? = nil) async throws -> (messages: [Message], next: Int?) {
++        let args: [String: Any] = before.map { ["before": $0] } ?? [:]
++        let data = try await rpc("owner.history", args)
++        let items: [Message] = (data["messages"] as? [[String: Any]] ?? []).compactMap { row in
++            guard let id = row["id"] as? String else { return nil }
++            let human = row["direction"] as? String == "human"
++            let sender = human ? "我" : (row["senderNickname"] as? String ?? "bot")
++            let text = row["text"] as? String ?? ""
++            let picture = (row["image"] as? String).flatMap { raw -> Data? in
++                guard raw.hasPrefix("data:image/"), let comma = raw.firstIndex(of:",") else { return nil }
++                return Data(base64Encoded:String(raw[raw.index(after:comma)...]))
++            }.flatMap { UIImage(data:$0) }
++            return Message(id:id,sender:sender,text:text,image:picture,hasAudio:row["audio"] is [String: Any])
++        }
++        return (items,data["nextBefore"] as? Int)
++    }
++    func earlier() async {
++        guard !busy, let before = nextBefore else { return }
++        busy = true; message = nil
++        defer { busy = false }
++        do {
++            let result = try await history(before:before)
++            let current = Set(messages.map(\.id))
++            messages = result.messages.filter { !current.contains($0.id) } + messages
++            nextBefore = result.next
++        } catch { message = error.localizedDescription }
++    }
++    func stopAudio() {
++        player?.stop()
++        player = nil
++    }
++    func play(_ id: String) async {
++        guard !busy, activeBot != nil else { return }
++        busy = true; message = nil; stopAudio()
++        defer { busy = false }
++        do {
++            let result = try await rpc("owner.audio",["messageId":id])
++            guard let encoded = result["base64"] as? String, encoded.count <= 6_990_508,
++                  let bytes = Data(base64Encoded:encoded) else { throw Failure(text:"语音读取失败。") }
++            player = try AVAudioPlayer(data:bytes)
++            if player?.play() != true { throw Failure(text:"此设备暂不能播放这个音频格式。") }
++        } catch { message = error.localizedDescription }
++    }
++    func select(_ id: String) async {
++        guard !busy else { return }
++        busy = true; message = nil; stopAudio()
++        defer { busy = false }
++        do { _ = try await rpc("account.select",["botId":id]); try await load() }
++        catch { message = error.localizedDescription }
++    }
++    func send(_ text: String, photo: PhotosPickerItem?) async -> Bool {
++        guard !busy, activeBot != nil else { return false }
++        busy = true; message = nil
++        defer { busy = false }
++        do {
++            var args: [String: Any] = ["text":text]
++            if let photo {
++                guard let bytes = try await photo.loadTransferable(type:Data.self), let image = UIImage(data:bytes),
++                      let jpeg = image.jpegData(compressionQuality:0.65), jpeg.count <= 2_000_000
++                else { throw Failure(text:"请选一张可读取且不超过 2 MB 的图片。") }
++                args["image"] = "data:image/jpeg;base64," + jpeg.base64EncodedString()
++            }
++            _ = try await rpc("owner.send",args)
++        } catch { message = error.localizedDescription; return false }
++        do { try await load() } catch { message = "已发送，历史暂未刷新。" }
++        return true
++    }
++    func signOut() async {
++        guard !busy else { return }
++        busy = true
++        defer { clear(); busy = false }
++        _ = try? await rpc("logout")
++    }
++}

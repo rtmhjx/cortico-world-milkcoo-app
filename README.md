@@ -4,6 +4,10 @@
 
 npm 发行包另外携带原 beta.7 的通用 Android/iOS 模板；为避免重复存放二进制，本 Git 仓库不包含 APK、IPA 和 iOS 源码 ZIP。需要测试安装包生成/下载时，请使用 npm 发行包。生成的个人配对安装包包含连接信息，请勿上传至仓库。
 
+## FFA Hub 接入
+
+CooDock World 提供部署配对入口。Android 和 iOS 的完整工程可应用同一仓库的适配补丁，详见 [FFA Hub 接入与回归说明](integrations/ffa/README.md)。
+
 # 移动前端coodock
 
 表情图片与索引仅写入本 World 的 milkcoo_app/stickers。不扫描或改写 QQ 等其他 World 的表情文件。旧 CooDock 索引只读兼容；跨 World 交换请由使用者显式导出后再上传导入。
