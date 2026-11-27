@@ -73,7 +73,7 @@ test('WorkbenchBridge confirms /api/worlds/activation against Cortico status: ac
 });
 
 test('addBootstrap preserves lanEndpoint and hostLabel alongside endpoint', () => {
-  const apk = readFileSync(new URL('../client/Coo-Mobile-0.6.0-dev.2-debug.apk', import.meta.url));
+  const apk = readFileSync(new URL('../client/CooDock-0.6.0-dev.15-companion-debug.apk', import.meta.url));
   const out = addBootstrap(apk, {
     endpoint: 'https://mental-weight-retro-pee.trycloudflare.com',
     lanEndpoint: 'http://192.168.1.3:7801',

@@ -1,8 +1,8 @@
 {
   "name": "cortico-world-milkcoo-app",
-  "version": "0.6.0-dev.6-tina.1-v71",
+  "version": "0.6.0-beta.1",
   "type": "module",
-  "description": "CooDock v43 本地原生管理后端候选：严格绑定当前 Bot 部署的原生控制台、卡片插座、记忆插件与模型管理。未部署。",
+  "description": "移动前端coodock：Coo / Cortico 的移动端与原生工作台后端（0.6.0-beta.1），支持主机直连、公网中转、世界聊天、多 Agent 切换与共享表情包库。",
   "license": "MIT",
   "keywords": [
     "cortico-world",
@@ -43,8 +43,8 @@
   "files": [
     "src",
     "client/Starpost.apk",
-    "client/Coo-Mobile-0.6.0-dev.2-debug.apk",
-    "client/Coo-Mobile-0.6.0-dev.2-workbench-debug.apk",
+    "client/CooDock-0.6.0-dev.15-companion-debug.apk",
+    "client/CooDock-0.6.0-dev.15-workbench-debug.apk",
     "client/ModelPanel.html",
     "client/DevicePanel.html",
     "client/Android-Guide.html",
@@ -75,6 +75,5 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/rtmhjx/cortico-world-milkcoo-app.git"
-  },
-  "private": true
+  }
 }

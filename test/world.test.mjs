@@ -12,7 +12,7 @@ import { createServer, request as httpRequest } from 'node:http';
 import { MobilePairing } from '../src/pairing.mjs';
 
 const token = 'test-token-no-production-secret';
-const appTemplatePresent = existsSync(new URL('../client/Coo-Mobile-0.6.0-dev.2-debug.apk', import.meta.url));
+const appTemplatePresent = existsSync(new URL('../client/CooDock-0.6.0-dev.15-companion-debug.apk', import.meta.url));
 const input = (id, device = 'phone-a', text = '你好，手机原文') => ({ id, device_id: device, text, created_at: '2026-10-28T01:00:00+08:00' });
 
 test('authenticated phone chunk route reports pending then verifiable bounded JSON', async t => {
@@ -432,7 +432,7 @@ test('auto-generated connection secret survives World restart and personalized A
 });
 
 test('APK connection payload replaces previous payload without changing original template', { skip: !appTemplatePresent }, () => {
-  const template = readFileSync(new URL('../client/Coo-Mobile-0.6.0-dev.2-debug.apk', import.meta.url));
+  const template = readFileSync(new URL('../client/CooDock-0.6.0-dev.15-companion-debug.apk', import.meta.url));
   const first = addBootstrap(template, { endpoint: 'http://192.168.2.3:7800', token: 'first-secret' });
   const second = addBootstrap(first, { endpoint: 'http://192.168.2.4:7800', token: 'second-secret' });
   assert.ok(first.includes(Buffer.from('first-secret')));

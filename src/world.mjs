@@ -167,8 +167,8 @@ function cameraSettings(input, modelOnly = false) {
   }
   return out;
 }
-const apkPath = fileURLToPath(new URL('../client/Coo-Mobile-0.6.0-dev.2-debug.apk', import.meta.url));
-const workbenchApkPath = fileURLToPath(new URL('../client/Coo-Mobile-0.6.0-dev.2-workbench-debug.apk', import.meta.url));
+const apkPath = fileURLToPath(new URL('../client/CooDock-0.6.0-dev.15-companion-debug.apk', import.meta.url));
+const workbenchApkPath = fileURLToPath(new URL('../client/CooDock-0.6.0-dev.15-workbench-debug.apk', import.meta.url));
 const modelPanelPath = fileURLToPath(new URL('../client/ModelPanel.html', import.meta.url));
 const clientFiles = {
   '/_coo/devices': ['../client/DevicePanel.html', 'text/html; charset=utf-8'],
