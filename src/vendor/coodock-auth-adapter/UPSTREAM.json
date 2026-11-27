@@ -1,0 +1,31 @@
+{
+  "name": "@coodock/auth-adapter",
+  "version": "0.1.0-dev.1",
+  "files": [
+    {
+      "source": "auth-adapter/src/index.mjs",
+      "file": "index.mjs",
+      "sha256": "041c68987a321a0d529c661e7c0ed8e91f91de68f76fb67a4b5ed79c3a281a5f"
+    },
+    {
+      "source": "auth-adapter/src/auth-sessions.mjs",
+      "file": "auth-sessions.mjs",
+      "sha256": "c2f450879fdf04b210bd842390efbb12df595cf0e53d0eb502f90c71df4d32ce"
+    },
+    {
+      "source": "auth-adapter/src/provider-bridge.mjs",
+      "file": "provider-bridge.mjs",
+      "sha256": "e0ec4b69f1bf5ba682fe2cfc84e89255c64270e59a4119a3aa3745461f7d7380"
+    },
+    {
+      "source": "auth-adapter/src/starpost-provider.mjs",
+      "file": "starpost-provider.mjs",
+      "sha256": "c138b527624d6003932a686c17ec7a134af8723d7a7277758c79faa2d9ff4dd9"
+    },
+    {
+      "source": "auth-adapter/LICENSE",
+      "file": "LICENSE",
+      "sha256": "ae2d74ce27053d19f83de635585bd640f1a68ec94d376279da72d633b6cfedb8"
+    }
+  ]
+}

@@ -7,7 +7,9 @@ const CONNECTOR_SECRET = 'MILKCOO_APP_PUBLIC_RELAY_CONNECTOR';
 const OWNER_KEY = /^mck_[A-Za-z0-9_-]{43}$/;
 const DEVICE_TOKEN = /^mcd_[A-Za-z0-9_-]{43}$/;
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
-const ALLOWED = new Set(['POST /v1/messages', 'GET /v1/feed', 'POST /v1/media', 'GET /v1/media', 'GET /v1/pet/resource', 'POST /v1/screen', 'DELETE /v1/screen']);
+const ALLOWED = new Set(['POST /v1/messages', 'GET /v1/feed', 'POST /v1/media', 'GET /v1/media',
+  'GET /v1/ecosystem', 'POST /v1/ecosystem/handoff', 'POST /v1/ecosystem/invoke', 'POST /v1/bottle/transfer',
+  'GET /v1/pet/resource', 'POST /v1/screen', 'DELETE /v1/screen']);
 const MAX_WORLD_RESPONSE = 12 * 1024 * 1024;
 const WORLD_CHAT_OPERATIONS = new Set(['feed', 'post', 'bot-listen', 'sticker-read', 'sticker-upload']);
 const WORLD_CHAT_ERRORS = new Set(['world_chat_muted', 'world_chat_invalid_request', 'world_chat_reply_not_found',
@@ -30,9 +32,10 @@ export function isPublicRelayKey(value) {
 }
 
 export class PublicRelayConnector {
-  constructor(context, localWorld, request = fetch) {
+  constructor(context, localWorld, request = fetch, internalDispatch = null) {
     this.context = context;
     this.localWorld = localWorld;
+    this.internalDispatch = internalDispatch;
     this.request = request;
     this.abort = new AbortController();
     this.state = 'unbound';
@@ -179,19 +182,43 @@ export class PublicRelayConnector {
     const limit = job.max_response_bytes;
     if (!ID.test(job.request_id ?? '') || !target || !ALLOWED.has(`${target.method} ${target.path}`)
         || !Number.isInteger(limit) || limit < 1 || limit > MAX_WORLD_RESPONSE) throw new Error('RELAY_JOB_INVALID');
+    // This operation receives its principal from the authenticated cloud job and
+    // runs entirely in this process; there is no HTTP endpoint accepting a tier.
+    if (target.method === 'POST' && target.path === '/v1/bottle/transfer') {
+      let status = 200, result;
+      try {
+        if (!this.internalDispatch) throw Object.assign(new Error('BOTTLE_UNAVAILABLE'), { status: 503 });
+        result = await this.internalDispatch(target.body);
+      } catch (error) {
+        status = Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599 ? error.status : 503;
+        result = { error: typeof error?.message === 'string' && /^BOTTLE_[A-Z_]+$/.test(error.message) ? error.message : 'BOTTLE_UNAVAILABLE' };
+      }
+      const bytes = Buffer.from(JSON.stringify(result));
+      if (bytes.length > limit) throw new Error('RELAY_RESPONSE_TOO_LARGE');
+      return { status, body_base64: bytes.toString('base64') };
+    }
     const { origin, token } = this.localWorld();
     const url = new URL(target.path, origin);
     if (target.query) {
       for (const [name, value] of Object.entries(target.query)) url.searchParams.set(name, String(value));
     }
     const body = target.method === 'POST' ? JSON.stringify(target.body) : undefined;
-    const response = await this.request(url, {
-      method: target.method, redirect: 'error',
-      headers: { authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) },
-      body, signal: AbortSignal.any([this.abort.signal, AbortSignal.timeout(10000)]),
-    });
-    let bytes = await readBounded(response, target.path === '/v1/pet/resource' ? Math.floor((limit - 1024) * 3 / 4) : limit);
-    if (target.path === '/v1/pet/resource' && response.ok) {
+    const petResource = target.path === '/v1/pet/resource';
+    let response, bytes;
+    try {
+      response = await this.request(url, {
+        method: target.method, redirect: 'error',
+        headers: { authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) },
+        body, signal: AbortSignal.any([this.abort.signal, AbortSignal.timeout(10000)]),
+      });
+      bytes = await readBounded(response, petResource ? Math.floor((limit - 1024) * 3 / 4) : limit);
+    } catch (error) {
+      if (!petResource || this.abort.signal.aborted) throw error;
+      const large = error?.message === 'RELAY_RESPONSE_TOO_LARGE';
+      return { status: large ? 413 : 504,
+        body_base64: Buffer.from(JSON.stringify({ error: large ? 'pet_resource_too_large' : 'pet_resource_unavailable' })).toString('base64') };
+    }
+    if (target.path === '/v1/pet/resource' && response.ok && target.query?.transfer !== 'chunks') {
       bytes = Buffer.from(JSON.stringify({ mime: response.headers.get('content-type') || 'application/octet-stream', data: bytes.toString('base64') }));
     }
     return { status: response.status, body_base64: bytes.toString('base64') };

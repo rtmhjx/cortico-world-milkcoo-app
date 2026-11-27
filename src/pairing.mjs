@@ -33,7 +33,7 @@ export class MobilePairing {
   clear() { this.tickets.clear(); }
 }
 
-function qrSvg(value) {
+export function qrSvg(value, label = '苹果设备配对码') {
   const qr = new QRCode(-1, QRLevel.M);
   qr.addData(value); qr.make();
   const count = qr.getModuleCount(), quiet = 4;
@@ -42,7 +42,7 @@ function qrSvg(value) {
     if (qr.isDark(y, x)) path += `M${x + quiet} ${y + quiet}h1v1h-1z`;
   }
   const size = count + quiet * 2;
-  return `<svg viewBox="0 0 ${size} ${size}" role="img" aria-label="苹果设备配对码" shape-rendering="crispEdges"><rect width="${size}" height="${size}" fill="white"/><path d="${path}" fill="#111"/></svg>`;
+  return `<svg viewBox="0 0 ${size} ${size}" role="img" aria-label="${escapeHtml(label)}" shape-rendering="crispEdges"><rect width="${size}" height="${size}" fill="white"/><path d="${path}" fill="#111"/></svg>`;
 }
 
 export function pairingPage(endpoint, ticket) {

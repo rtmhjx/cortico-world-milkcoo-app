@@ -1,3 +1,4 @@
+import { dockTool } from './dock-tool-fixture.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -63,10 +64,10 @@ test('public sticker reading, explicit saving and sticker-only posting are separ
   t.after(() => relay.stop());
   world.publicRelay = relay; world.store = {};
   world.host = { modelFacts: { accepts: mime => mime === 'image/png' } };
-  const byName = Object.fromEntries(world.tools().map(({ name, handler }) => [name, handler]));
-  assert.equal(Object.keys(byName).some(name => name.includes('listen')), false, 'model must not control listening');
-  const read = byName.milkcoo_app_world_chat_sticker_read, save = byName.milkcoo_app_world_chat_sticker_save;
-  const post = byName.milkcoo_app_world_chat_post, stats = byName.milkcoo_app_sticker_stats;
+  const { actions } = JSON.parse(await dockTool(world, 'help').handler({}));
+  assert.equal(actions.some(name => name.includes('listen')), false, 'model must not control listening');
+  const read = dockTool(world, 'room_sticker_read').handler, save = dockTool(world, 'room_sticker_save').handler;
+  const post = dockTool(world, 'room_post').handler, stats = dockTool(world, 'stickers').handler;
   const args = { sticker_id: sticker.id };
   assert.equal(JSON.parse((await read(args)).text).error, 'world_chat_bot_listen_disabled');
   assert.match(await stats({}), /共 0 张/);

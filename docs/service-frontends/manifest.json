@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "services": [
+    {
+      "id": "starpost",
+      "displayName": "星邮",
+      "description": "原版消息、联系人、发现、个人页及现有小游戏等原生能力。",
+      "world": {
+        "id": "starpost"
+      },
+      "backend": {
+        "ownership": "service-operated",
+        "notes": "继续使用星邮原服务器；宿主不迁移社交业务。"
+      },
+      "auth": {
+        "providerId": "ins-identity",
+        "sessionKey": "serviceId+issuer+subject+botId",
+        "state": "pending-provider",
+        "legacyLogin": true,
+        "notes": "原版邮箱认证可用；共同登录器等待 ins 接入，不能把 Bot 凭据当人类会话。"
+      },
+      "platforms": {
+        "android": {
+          "state": "bundled",
+          "kind": "native-activity",
+          "entrypoint": "net.tina.mobile.starpost.StarpostActivity",
+          "minSdk": 26,
+          "notes": "固定提交的原版 Compose 前端已纳入源码；bundled 表示源码预载，不代表真实账号联调验收。"
+        },
+        "ios": {
+          "state": "planned",
+          "kind": "native-scene",
+          "notes": "同一身份及事件契约，iOS 原生 UI 尚未实现。"
+        }
+      },
+      "source": {
+        "repository": "https://github.com/hth768/cortico-world-starpost",
+        "revision": "eff2d7704e33d7ffacca5406065f1c495daef134",
+        "license": "MIT",
+        "notes": "Android 1.10.3；详细来源及修改见原生子包 UPSTREAM-SOURCES.json。"
+      }
+    },
+    {
+      "id": "flower-town",
+      "displayName": "花语乡",
+      "description": "小镇、地点、场景、活动及其原有交互。",
+      "world": {
+        "id": "bloom",
+        "notes": "逻辑服务槽位 ID；具体上游 World ID 由作者交付时映射。"
+      },
+      "backend": {
+        "ownership": "service-operated",
+        "notes": "场景和游戏状态继续由花语乡服务器维护。"
+      },
+      "auth": {
+        "providerId": "ins-identity",
+        "sessionKey": "serviceId+issuer+subject+botId",
+        "state": "pending-provider",
+        "legacyLogin": false
+      },
+      "platforms": {
+        "android": {
+          "state": "awaiting-upstream",
+          "kind": "native-view",
+          "entrypoint": "net.tina.mobile.FlowerTownFrontend",
+          "minSdk": 26,
+          "notes": "现有类仅为原生交付插槽；完整游戏前端仍待作者提供，不能作为游戏已接入的证明。"
+        },
+        "ios": {
+          "state": "planned",
+          "kind": "native-scene"
+        }
+      }
+    },
+    {
+      "id": "bottle",
+      "displayName": "漂流瓶",
+      "description": "海边信箱、捞瓶、写信、回复与原文阅读。",
+      "world": {
+        "id": "bottle"
+      },
+      "backend": {
+        "ownership": "service-operated",
+        "notes": "复用漂流瓶既有 World 与信箱服务。"
+      },
+      "auth": {
+        "providerId": "ins-identity",
+        "sessionKey": "serviceId+issuer+subject+botId",
+        "state": "pending-provider",
+        "legacyLogin": true
+      },
+      "platforms": {
+        "android": {
+          "state": "bundled",
+          "kind": "native-view",
+          "minSdk": 26,
+          "notes": "原生核心信箱已预载；主题等未覆盖项见上游覆盖说明。真实服务联调另验收。",
+          "entrypoint": "net.tina.mobile.services.bottle.BottleFrontend"
+        },
+        "ios": {
+          "state": "planned",
+          "kind": "native-scene"
+        }
+      },
+      "source": {
+        "repository": "https://github.com/Unnori/cortico-world-bottle-client",
+        "notes": "原生接入所依赖的具体版本及许可由适配交付记录补充。"
+      }
+    }
+  ]
+}

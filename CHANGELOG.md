@@ -1,15 +1,27 @@
-## 0.5.0-beta.8
+# 0.6.0-dev.4-tina.3-native-v43
 
-- Isolate sticker images and index in milkcoo_app/stickers; remove automatic QQ library scanning and writes.
-- Keep own legacy metadata readable and preserve phone/public-room sticker operations.
-- Add author, messaging tag and the public source repository: https://github.com/rtmhjx/cortico-world-milkcoo-app.
+Local undeployed candidate: restores fixed native management transactions, pins every host request to the current Bot deployment, retains configuration backup and verifies write readbacks. Does not publish or replace live state. Android templates retained from the original World are legacy templates, not the Starpost v43 base/split delivery.
 
-## 0.5.0-beta.7
+# 2026-11-14 — isolated sticker storage
 
-- 普通中转密钥支持桌宠资源与屏幕采样。电脑 World 填写密钥后可生成专属安装包。
-- 公网中转下屏幕采样默认使用中转通道；摄像头规则不变。
-- 桌宠单个资源约限 6 MiB；屏幕采集为 JPEG 抽帧。
-- 两种 Android 包基于 0.6.0-dev.7 开发源码构建。
+- Removed automatic discovery, reading and rewriting of QQ/other-World sticker libraries.
+- Images and index now live exclusively in milkcoo_app/stickers; prior CooDock-only index is read-only compatibility input.
+- Preserve phone upload/download, explicit public-room saves and duplicate-save behavior. Storage failures no longer report a successful save.
+- Added author, the messaging tag and the public World source repository: https://github.com/rtmhjx/cortico-world-milkcoo-app.
+
+# 0.6.0-dev.2 — independent authentication adapter candidate
+
+- Extracted sessions and handoff into a framework-independent, zero-dependency auth-adapter package; the World keeps a compatibility facade and source-hashed vendor copy.
+- Preserved old Core storage and HTTP routes, and added optional principal type, installation, scopes and audience fields.
+- Android exposes a replaceable driver/presenter bridge, atomic batch persistence and configured service slots.
+- The separate relay adapter is prepared for verified Hub login and default text entitlement. No Hub protocol or endpoint is hard-coded, and no production route is mounted.
+
+# 0.6.0-dev.1 — native service frontend candidate
+
+- Preloaded native Starpost UI, native core Bottle mailbox, and an explicit author slot for Bloom's full native frontend.
+- Added ServiceFrontend lifecycle, service context, per-service session storage and replaceable common-login interfaces.
+- Added World-to-App short-lived authentication handoff and three fixed public-relay operations.
+- Candidate only: ins common identity, Bloom native game frontend, real-account/device acceptance and production rollout remain pending.
 
 # 更新记录
 
@@ -201,4 +213,5 @@
 - 适配 Cortico World API 6。
 - 手机端设置收进左侧菜单，提供新手引导；聊天图片直接显示，语音按需播放。
 - 手机通道保留离线记录和来源，添加媒体类型轻量读取。
+
 

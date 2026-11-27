@@ -1,13 +1,9 @@
-## 公开源码与发行包
-
-这里保存已发布 World 的运行源码、面板 HTML、文档和相关回归测试。Node.js 24 下运行 `npm test` 和 `npm run check`，无需安装第三方依赖。
-
-npm 发行包另外携带原 beta.7 的通用 Android/iOS 模板；为避免重复存放二进制，本 Git 仓库不包含 APK、IPA 和 iOS 源码 ZIP。需要测试安装包生成/下载时，请使用 npm 发行包。生成的个人配对安装包包含连接信息，请勿上传至仓库。
-
 # 移动前端coodock
 
-表情图片与索引仅写入本 World 的 milkcoo_app/stickers。不扫描或改写 QQ 等其他 World 的表情文件。旧 CooDock 索引只读兼容；跨 World 交换请由使用者显式导出后再上传导入。
+> 2026-11-14 表情存储修复：表情图片与索引仅写入本 World 的 `milkcoo_app/stickers/`。不自动发现、读取或改写 QQ 等其他 World 的表情目录。兼容读取 CooDock 自己旧的 `milkcoo_app/sticker-index.json`，只保留图片实际存在于自己目录的条目；旧索引不改写。其他 World 的表情需由使用者先显式导出，再通过手机表情上传导入 CooDock。此前已写进其他 World 的文件不自动回滚或删除。
 
+
+0.6.0-dev.2 是本地认证适配候选：公共会话／设备交接逻辑已提取到独立 auth-adapter，World 仅作兼容适配；Android 增加可替换 driver／presenter 接线。默认没有真实 Hub 驱动，仍为 pending。正式协议和登录界面由 ins 接入；各 World 不互相依赖。本轮未部署线上，构建与合成测试不代表真实账号验收。
 
 0.5.0-beta.4 新增公网主页与安卓公网配对。电脑上的 World 用领取的密钥绑定主机，生成只供自己安装的 APK。现有直连继续可用。iOS 沿用原直连测试材料。
 

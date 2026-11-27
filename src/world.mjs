@@ -6,12 +6,22 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MobileError, MobileStore } from './store.mjs';
 import { addBootstrap } from './apk-bootstrap.mjs';
+import { EcosystemSessions, dispatchEcosystemRequest } from './ecosystem-session.mjs';
+import { ServiceFrontends, registerEcosystemProviders, frontendManifest } from './service-frontends.mjs';
+import { ecosystemPanel } from './ecosystem-panel.mjs';
+import { createCooDockFfaAccount } from './ffa-account.mjs';
+import { createStandaloneFfaAccount } from './ffa-standalone.mjs';
+import { CooDockStarpostLan } from './starpost-lan.mjs';
+import { CooDockCloudChannel } from './dock-channel.mjs';
+import { starpostHubPanel, starpostPairResult, starpostTemplate } from './starpost-hub-panel.mjs';
 import { readPetResource, writePetPreferences } from './pet-resources.mjs';
+import { PetTransfer } from './pet-transfer.mjs';
 import { DesktopScreenSampler } from './desktop-screen.mjs';
 import { ModelControl } from './model-control.mjs';
 import { MobilePairing, pairingPage } from './pairing.mjs';
 import { fetchEasyTierAsset } from './easytier-assets.mjs';
 import { BottleBridge } from './bottle-bridge.mjs';
+import { BottleTransfer } from './bottle-transfer.mjs';
 import { requestPetInterrupt } from './pet-control.mjs';
 import { WorkbenchBridge } from './workbench-bridge.mjs';
 import { wardrobeState, changeWardrobe, figureOperation, importFigureZip } from './pet-wardrobe.mjs';
@@ -34,9 +44,9 @@ function localControlRequest(req, port) {
   return Boolean(local && [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`].includes(host));
 }
 const object = (properties, required = []) => ({ type: 'object', additionalProperties: false, properties, required });
-export const toolSchemas = [
+const operationSchemas = [
   { name: 'milkcoo_app_devices', tags: ['read'], description: 'Read connected phone devices, capabilities, and last contact time.', parameters: object({}) },
-  { name: 'milkcoo_app_device_request', tags: ['flow'], description: 'Queue a native operation for a connected phone device; use milkcoo_app_device_result with the same operation_id to read the completion receipt.',
+  { name: 'milkcoo_app_device_request', tags: ['flow'], description: 'Queue a native operation for a connected phone device; use device_result with the same operation_id for its receipt.',
     parameters: object({ device_id: {type:'string'}, operation_id: {type:'string'}, path: {type:'string', enum:['/native/capabilities','/native/capture','/native/tts','/native/notification','/native/audio']}, args: {type:'object'} }, ['device_id','path']) },
   { name: 'milkcoo_app_device_result', tags: ['read'], description: 'Read the execution receipt for a native operation. Captured media is returned as a real blob with its capture timestamp.', parameters: object({ operation_id: {type:'string'} }, ['operation_id']) },
   { name: 'milkcoo_app_reply', tags: ['speak'], description: 'Send a text reply to a phone message using its exact device_id and message_id as in_reply_to.',
@@ -63,13 +73,75 @@ export const toolSchemas = [
     parameters: object({ device_id: { type: 'string' }, quality: { type: 'string', enum: ['low', 'balanced', 'high'] }, interval_sec: { type: 'integer', minimum: 2, maximum: 120 }, adaptive: { type: 'boolean' } }) },
   { name: 'milkcoo_app_camera_say', tags: ['speak'], description: 'Send a direct message to the phone during an active camera session.',
     parameters: object({ device_id: { type: 'string' }, text: { type: 'string', minLength: 1, maxLength: 32000 } }, ['device_id', 'text']) },
-  { name: 'milkcoo_app_sticker_stats', tags: ['read'], description: '查看手机与本 World 共用的 CooDock 表情包库：返回总数、按情感分布与可用 [表情包:文件名] 列表。在 milkcoo_app_reply 正文中直接写 [表情包:文件名] 即可作为独立表情包发往手机（表情包不算作普通图片附件）。',
+  { name: 'milkcoo_app_sticker_stats', tags: ['read'], description: '查看手机和本 World 共用的表情包库。将 [表情包:文件名] 直接写进 reply 正文即可作为表情发送。',
     parameters: object({ limit: { type: 'integer', minimum: 1, maximum: 50 } }) },
 ];
+const actionRoutes = {
+  reply: 'reply',
+  screen: 'read_screen',
+  camera: 'read_camera',
+  camera_say: 'camera_say',
+  camera_control: 'camera_control',
+  room_read: 'world_chat_read',
+  room_post: 'world_chat_post',
+  room_sticker_read: 'world_chat_sticker_read',
+  room_sticker_save: 'world_chat_sticker_save',
+  stickers: 'sticker_stats',
+  devices: 'devices',
+  status: 'status',
+  device_request: 'device_request',
+  device_result: 'device_result',
+  pet_interrupt: 'pet_interrupt',
+};
+const operations = new Map(operationSchemas.map(schema => [schema.name, schema]));
+function actionSchema(action, args) {
+  const suffix = Object.hasOwn(actionRoutes, action) ? actionRoutes[action] : null;
+  return suffix ? operations.get('milkcoo_app_' + (action === 'reply' && args?.handle ? 'send_media' : suffix)) : null;
+}
+export const toolSchemas = [{
+  name: 'coodock_use', tags: ['flow'],
+  description: '使用 CooDock。reply 的 JSON 参数含 device_id、in_reply_to 和 text 或 handle；其他操作用 help 查参数。',
+  parameters: object({
+    action: { type: 'string', enum: ['help', ...Object.keys(actionRoutes)] },
+    argsJson: { type: 'string', maxLength: 65536, description: '参数 JSON 对象，无参数填 {}。help 可填 {"action":"room_read"}。' },
+  }, ['action', 'argsJson']),
+}];
+
+function actionArgs(args, schema) {
+  if (args === null || typeof args !== 'object' || Array.isArray(args)) return false;
+  if (schema.required.some(key => !Object.hasOwn(args, key))) return false;
+  return Object.entries(args).every(([key, value]) => {
+    if (!Object.hasOwn(schema.properties, key)) return false;
+    const rule = schema.properties[key];
+    switch (rule.type) {
+      case 'string': return typeof value === 'string';
+      case 'boolean': return typeof value === 'boolean';
+      case 'integer': return Number.isSafeInteger(value);
+      case 'object': return value !== null && typeof value === 'object' && !Array.isArray(value);
+      default: return false;
+    }
+  });
+}
 const MEDIA_LIMIT = 8 * 1024 * 1024;
 // A MIME identifies the stored bytes; it does not imply model support or that a
 // recipient may execute the file. Legacy image/audio values remain valid.
 const mediaMime = mime => typeof mime === 'string' && mime.length <= 100 && /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(mime);
+function petMirror(event) {
+  let command;
+  if (event.source === 'desktop-pet' && event.meta?.kind === 'say' && Array.isArray(event.meta.beats)) {
+    command = { t: 'say', id: 'starpost-pet-' + event.cursor, beats: event.meta.beats.slice(0, 16).map(beat => ({
+      text: typeof beat?.text === 'string' ? beat.text.slice(0, 800) : '',
+      actions: typeof beat?.mood?.id === 'string' ? [beat.mood.id.slice(0, 80)] : [], anchors: [],
+    })) };
+  } else if ([WORLD_ID, LEGACY_WORLD_ID].includes(event.source) && event.type === 'coo_mobile.pet_state') {
+    const source = event.meta?.command;
+    if (source && ['act', 'status', 'listen'].includes(source.t))
+      command = { t: source.t, ...Object.fromEntries(['id', 'action', 'word', 'mode', 'state', 'text', 'active', 'listening']
+        .filter(key => ['string', 'boolean', 'number'].includes(typeof source[key]))
+        .map(key => [key, typeof source[key] === 'string' ? source[key].slice(0, 200) : source[key]])) };
+  }
+  return command ? [{ cursor: event.cursor, type: 'pet.command', ts: event.ts, command }] : [];
+}
 function mediaName(value) {
   if (value === undefined || value === null) return null;
   if (typeof value !== 'string' || !value.trim() || value.length > 255 || /[\\/\u0000-\u001f]/.test(value)) throw new MobileError('INVALID_MEDIA_NAME');
@@ -95,8 +167,8 @@ function cameraSettings(input, modelOnly = false) {
   }
   return out;
 }
-const apkPath = fileURLToPath(new URL('../client/CooDock-0.6.0-dev.7-debug.apk', import.meta.url));
-const workbenchApkPath = fileURLToPath(new URL('../client/CooDock-0.6.0-dev.7-workbench-debug.apk', import.meta.url));
+const apkPath = fileURLToPath(new URL('../client/Coo-Mobile-0.6.0-dev.2-debug.apk', import.meta.url));
+const workbenchApkPath = fileURLToPath(new URL('../client/Coo-Mobile-0.6.0-dev.2-workbench-debug.apk', import.meta.url));
 const modelPanelPath = fileURLToPath(new URL('../client/ModelPanel.html', import.meta.url));
 const clientFiles = {
   '/_coo/devices': ['../client/DevicePanel.html', 'text/html; charset=utf-8'],
@@ -200,8 +272,32 @@ function easyTierPanel(nonce, message = '') {
 }
 
 /** Cortico World API 6. */
+const PET_TOUCH_WINDOW_MS = 180000;
+const PET_TOUCH_MAX_BATCH = 12;
+const petTouchLabels = {
+  poke: ['戳了戳手机上的小人', '戳了戳小人'],
+  pet: ['摸了摸手机上的小人', '摸了摸小人'],
+  grab: ['拿起了手机上的小人', '拿起了小人'],
+  drop: ['放下了手机上的小人', '放下了小人'],
+  throw: ['抛了一下手机上的小人', '抛了一下'],
+  crash: ['手机上的小人碰到了边界', '撞到了边界'],
+};
+
+export function formatPetTouchSummary(deviceId, items) {
+  const counts = new Map();
+  for (const { kind, label } of items) {
+    const entry = counts.get(kind);
+    if (entry) entry.count++;
+    else counts.set(kind, { label, count: 1 });
+  }
+  const interactions = [...counts.values()].map(({ label, count }) => `${label}×${count}`).join('、');
+  return `[手机桌宠互动汇总 device_id=${JSON.stringify(deviceId)} count=${items.length}]\n最近互动：${interactions}`;
+}
+
 export class TinaMobileWorld {
   id = WORLD_ID;
+  petTouchBuffers = new Map();
+  petTouchFlushes = new Map();
   constructor(context) { this.context = context; this.host = null; this.store = null; this.server = null; this.pending = null; this.petInterrupts = new Map(); this.dispatchRequested = false; this.lastError = null; this.personalApk = null; this.appError = null; this.screenFrames = new Map(); this.cameraSessions = new Map(); this.pairing = new MobilePairing(); this.mobileEndpoint = null; }
   envPromptVars() { return {}; }
   console() { return {
@@ -215,11 +311,15 @@ export class TinaMobileWorld {
         [worldSetting + '.consolePort']: { type: 'integer', title: 'Coo 控制台端口', description: '手机修改模型时访问同一 Coo 的本机控制台；默认 17788。', minimum: 1, maximum: 65535, 'x-hot': false },
         [worldSetting + '.consoleUiUrl']: { type: 'string', title: '手机上的完整 Coo 控制台地址', description: '填写手机可访问的完整 HTTP(S) 界面地址，保留域名与路径；留空时在手机设置。不从手机通道地址推算。', 'x-hot': true },
         [worldSetting + '.tokenSecret']: { type: 'string', title: '接入密钥的名称', description: '默认 MILKCOO_APP_TOKEN；这里填写名称，不填写密钥内容。', 'x-hot': false },
+        [worldSetting + '.starpostApk']: { type: 'string', title: '已签名星邮 APK 模板路径', description: '留空时查找 STARPOST_APK_TEMPLATE 或 client/Starpost.apk。', 'x-hot': true },
+        [worldSetting + '.starpostBotId']: { type: 'string', title: 'CooDock 静态 Bot ID', description: '未收到同进程星邮部署握手时使用。' },
       } } }],
-    links: [ ...(this.address() ? [{ label: '手机安装与连接指南（安卓 / iOS）', href: `http://127.0.0.1:${this.address().port}/_coo/devices` }] : []),
+    links: [ ...(this.address() ? [{ label: '星邮 × CooDock 一体化入口', href: `http://127.0.0.1:${this.address().port}/_coo/starpost-hub` },
+        { label: '手机安装与连接指南（安卓 / iOS）', href: `http://127.0.0.1:${this.address().port}/_coo/devices` }] : []),
        { label: '前往公网主页', href: PUBLIC_HOME },
        ...(this.address() ? [{ label: '填写公网密钥并生成专属 APK', href: `http://127.0.0.1:${this.address().port}/_coo/relay-apk` }] : []),
        ...(this.address() ? [{ label: '世界聊天 · Bot 收听', href: `http://127.0.0.1:${this.address().port}/_coo/world-chat` }] : []),
+       ...(this.address() ? [{ label: '预载服务与共同登录', href: `http://127.0.0.1:${this.address().port}/_coo/ecosystem` }] : []),
        ...(this.personalApk && this.address() ? [{ label: '下载安卓 APK · 主机版（直连专属）', href: this.downloadUrl() },
         ...(existsSync(workbenchApkPath) ? [{ label: '下载安卓 APK · 完整工作台（本机专属）', href: this.downloadUrl().replace('/install.apk', '/install-workbench.apk') }] : [])] : []),
       ...(this.address() ? [{ label: '下载 iOS IPA（未签名）', href: `http://127.0.0.1:${this.address().port}/_coo/ios-unsigned.ipa` },
@@ -329,101 +429,127 @@ export class TinaMobileWorld {
   }
 
   tools() {
-    return toolSchemas.map(schema => ({ ...schema, handler: async (input, call) => {
-      try {
-        if (!this.store || !this.host) throw new MobileError('MOBILE_STOPPED', 503);
-        if (schema.name.startsWith('milkcoo_app_world_chat_')) {
-          return await this.worldChatTool(input, call, schema.name.slice('milkcoo_app_world_chat_'.length));
-        }
-        if (schema.name === 'milkcoo_app_devices') return JSON.stringify({devices:this.nativeDevices.devices()});
-        if (schema.name === 'milkcoo_app_device_request') {
-          if (!input.operation_id && !call?.callId) throw new MobileError('STABLE_CALL_ID_REQUIRED');
-          return JSON.stringify(this.nativeDevices.enqueue({...input, world_id:this.id, operation_id:input.operation_id || 'native-'+createHash('sha256').update(JSON.stringify([call.role,call.callId])).digest('hex')}));
-        }
-        if (schema.name === 'milkcoo_app_device_result') {
-          const result=this.nativeDevices.row(input.operation_id);
-          if(!result) return JSON.stringify({state:'unavailable',reason:'operation_not_found'});
-          const media=result.result?.media_id ? this.nativeDevices.media(result.device_id,result.result.media_id) : null;
-          if(media && result.state==='succeeded') return {text:JSON.stringify(result),blobs:[{bytes:Buffer.from(media.data),mime:media.mime,name:'phone-native-frame.jpg',fallbackText:'Captured phone frame.'}]};
-          return JSON.stringify(result);
-        }
-        if (schema.name === 'milkcoo_app_pet_interrupt') return await requestPetInterrupt(this.host, this.id, this.context.botDir, input, call, this.petInterrupts);
-        if (schema.name === 'milkcoo_app_sticker_stats') {
-          this.stickerLibrary ??= new SharedStickerLibrary(this.context);
-          const s = this.stickerLibrary.stats(input.limit ?? 20);
-          const lines = s.recent.map(m => `- [表情包:${m.file}] ${m.label}（情感:${m.emotion} / 用处:${m.usage}${m.tag ? ' / 标签:' + m.tag : ''} / 出现${m.count ?? 1}次）`);
-          const byEmo = Object.entries(s.byEmotion).map(([k, v]) => `${k}:${v}`).join('，') || '无';
-          return `手机与 Coo 共用表情包库共 ${s.total} 张；情感分布：${byEmo}\n可用列表：\n${lines.join('\n') || '（暂无）'}`;
-        }
-        if (schema.name === 'milkcoo_app_status') {
-          const device = input.device_id === undefined ? undefined : text(input.device_id, 'device_id', 128);
-          return JSON.stringify({ ...this.store.status(device), listening: this.address(), last_error: this.lastError });
-        }
-        if (schema.name === 'milkcoo_app_read_screen') {
-          const native = await this.nativeFrame('screen', input, call); if (native) return native;
-          const device = input.device_id === undefined ? (this.screenFrames.size === 1 ? this.screenFrames.keys().next().value : undefined) : text(input.device_id, 'device_id', 128);
-          if (!device) return { text: JSON.stringify({ ok: false, error: 'SPECIFY_DEVICE', devices: [...this.screenFrames.keys()] }), failed: true };
-          const frame = this.screenFrames.get(device);
-          if (!frame) return { text: '该手机没有开启屏幕共享或尚未送来画面。', failed: true };
-          if (!await this.canAcceptImage()) return { text: '当前模型未启用图片输入能力，暂无法直接读取该屏幕画面。', failed: true };
-          return { text: `手机屏幕截图，device_id=${JSON.stringify(device)}，采集时间 ${frame.captured_at}。`,
-            blobs: [{ bytes: frame.bytes, mime: 'image/jpeg', name: 'phone-screen.jpg', fallbackText: '手机屏幕截图。' }] };
-        }
-        if (schema.name === 'milkcoo_app_read_camera' || schema.name === 'milkcoo_app_camera_control' || schema.name === 'milkcoo_app_camera_say') {
-          if (schema.name === 'milkcoo_app_read_camera') { const native = await this.nativeFrame('camera', input, call); if (native) return native; }
-          const live = [...this.cameraSessions.entries()].filter(([, session]) => Date.now() - session.last_seen < 30000);
-          const device = input.device_id === undefined ? (live.length === 1 ? live[0][0] : undefined) : text(input.device_id, 'device_id', 128);
-          if (!device) return { text: JSON.stringify({ ok: false, error: 'SPECIFY_DEVICE', devices: live.map(([id]) => id) }), failed: true };
-          const session = this.cameraSessions.get(device);
-          if (!session || Date.now() - session.last_seen >= 30000) return { text: '手机摄像头未开启或连接已过期。', failed: true };
-          if (schema.name === 'milkcoo_app_camera_say') {
-            if (call.signal?.aborted) throw new MobileError('CALL_CANCELLED');
-            if (!call.callId) throw new MobileError('STABLE_CALL_ID_REQUIRED');
-            const id = `camera-reply-${createHash('sha256').update(JSON.stringify([this.context.botDir, call.role, call.callId])).digest('hex')}`;
-            const existing = this.store.get(id);
-            const { record } = this.store.insert({ id, device_id: device, text: text(input.text, 'text'),
-              source_ref: `camera-session:${session.session_id}`, created_at: existing?.created_at ?? new Date().toISOString() }, 'assistant_message');
-            return JSON.stringify({ id: record.id, server_seq: record.server_seq, state: 'queued_for_phone', phone_read: 'unknown' });
-          }
-          if (schema.name === 'milkcoo_app_camera_control') {
-            if (call.signal?.aborted) throw new MobileError('CALL_CANCELLED');
-            const patch = cameraSettings(input, true);
-            if (!Object.keys(patch).length) return JSON.stringify({ ok: true, ...session.config, revision: session.revision });
-            session.config = { ...session.config, ...patch }; session.revision++;
-            return JSON.stringify({ ok: true, ...session.config, revision: session.revision });
-          }
-          if (!session.frame) return { text: '手机摄像头已开启，但尚未收到画面。', failed: true };
-          if (!await this.canAcceptImage()) return { text: '当前模型未启用图片输入能力，暂无法直接读取该摄像头画面。', failed: true };
-          return { text: `手机摄像头画面，device_id=${JSON.stringify(device)}，采集时间 ${session.frame.captured_at}。`,
-            blobs: [{ bytes: session.frame.bytes, mime: 'image/jpeg', name: 'phone-camera.jpg', fallbackText: '手机摄像头画面。' }] };
-        }
-        if (call.signal?.aborted) throw new MobileError('CALL_CANCELLED');
-        if (!call.callId) throw new MobileError('STABLE_CALL_ID_REQUIRED');
-        const device = text(input.device_id, 'device_id', 128);
-        const sourceId = text(input.in_reply_to, 'in_reply_to', 160);
-        const source = this.store.get(sourceId);
-        if (!source || source.kind !== 'user_message' || source.device_id !== device) throw new MobileError('PHONE_MESSAGE_NOT_FOUND', 404);
-        const replyId = `reply-${createHash('sha256').update(JSON.stringify([this.context.botDir, call.role, call.callId])).digest('hex')}`;
-        let sourceRef;
-        let messageText = input.text;
-        if (schema.name === 'milkcoo_app_send_media') {
-          const attachment = this.host.blob(text(input.handle, 'handle', 512));
-          if (!attachment) throw new MobileError('BLOB_NOT_FOUND', 404);
-          const bytes = Buffer.from(attachment.bytes);
-          if (!mediaMime(attachment.mime) || bytes.length < 1 || bytes.length > MEDIA_LIMIT) throw new MobileError('MEDIA_UNSUPPORTED');
-          const fileName = mediaName(input.file_name ?? (typeof attachment.name === 'string' ? attachment.name.split(/[\\/]/).at(-1) || null : null));
-          this.store.putMedia(replyId, device, attachment.mime, createHash('sha256').update(bytes).digest('hex'), bytes, fileName);
-          sourceRef = `coo-media:${replyId}`;
-          messageText = typeof input.text === 'string' && input.text.trim() ? input.text : (attachment.mime.startsWith('image/') ? '[图片]' : attachment.mime.startsWith('audio/') ? '[语音]' : `[附件]${fileName ? ' ' + fileName : ''}`);
-        }
-        const existing = this.store.get(replyId);
-        const { record } = this.store.insert({ id: replyId, device_id: device, text: text(messageText, 'text'), source_ref: sourceRef,
-          in_reply_to: sourceId, created_at: existing?.created_at ?? new Date().toISOString() }, 'assistant_message');
-        return JSON.stringify({ id: record.id, server_seq: record.server_seq, state: 'queued_for_phone', phone_read: 'unknown' });
-      } catch (error) {
-        return { text: JSON.stringify({ ok: false, error: error instanceof MobileError ? error.message : 'MOBILE_INTERNAL_ERROR' }), failed: true };
+    return [{ ...toolSchemas[0], handler: (input, call) => this.useDock(input, call) }];
+  }
+
+  async useDock(input, call) {
+    const bad = error => ({ text: JSON.stringify({ ok: false, error }), failed: true });
+    if (!input || typeof input.action !== 'string' || typeof input.argsJson !== 'string' ||
+        input.argsJson.length > 65536 || Object.keys(input).some(key => !['action', 'argsJson'].includes(key)))
+      return bad('INVALID_COODOCK_INPUT');
+    let args;
+    try { args = JSON.parse(input.argsJson); }
+    catch { return bad('INVALID_COODOCK_ARGS_JSON'); }
+    if (input.action === 'help') {
+      if (!actionArgs(args, object({ action: { type: 'string' } }))) return bad('INVALID_COODOCK_INPUT');
+      if (args.action === undefined) return JSON.stringify({ actions: Object.keys(actionRoutes) });
+      const schemas = args.action === 'reply' ? [actionSchema('reply'), actionSchema('reply', { handle: true })] : [actionSchema(args.action)];
+      if (!schemas[0]) return bad('UNKNOWN_COODOCK_ACTION');
+      return JSON.stringify({ action: args.action, variants: schemas.map(({ description, parameters }) => ({ description, parameters })) });
+    }
+    const schema = actionSchema(input.action, args);
+    if (!schema) return bad('UNKNOWN_COODOCK_ACTION');
+    if (!actionArgs(args, schema.parameters))
+      return bad(schema.name.startsWith('milkcoo_app_world_chat_') ? 'INVALID_WORLD_CHAT_INPUT' : 'INVALID_COODOCK_ACTION_ARGS');
+    return this.invokeDockOperation(schema.name, args, call);
+  }
+
+  async invokeDockOperation(name, input, call = {}) {
+    const schema = operations.get(name);
+    try {
+      if (!schema) throw new MobileError('UNKNOWN_COODOCK_ACTION');
+      if (!this.store || !this.host) throw new MobileError('MOBILE_STOPPED', 503);
+      if (schema.name.startsWith('milkcoo_app_world_chat_')) {
+        return await this.worldChatTool(input, call, schema.name.slice('milkcoo_app_world_chat_'.length));
       }
-    } }));
+      if (schema.name === 'milkcoo_app_devices') return JSON.stringify({devices:this.nativeDevices.devices()});
+      if (schema.name === 'milkcoo_app_device_request') {
+        if (!input.operation_id && !call?.callId) throw new MobileError('STABLE_CALL_ID_REQUIRED');
+        return JSON.stringify(this.nativeDevices.enqueue({...input, world_id:this.id, operation_id:input.operation_id || 'native-'+createHash('sha256').update(JSON.stringify([call.role,call.callId])).digest('hex')}));
+      }
+      if (schema.name === 'milkcoo_app_device_result') {
+        const result=this.nativeDevices.row(input.operation_id);
+        if(!result) return JSON.stringify({state:'unavailable',reason:'operation_not_found'});
+        const media=result.result?.media_id ? this.nativeDevices.media(result.device_id,result.result.media_id) : null;
+        if(media && result.state==='succeeded') return {text:JSON.stringify(result),blobs:[{bytes:Buffer.from(media.data),mime:media.mime,name:'phone-native-frame.jpg',fallbackText:'Captured phone frame.'}]};
+        return JSON.stringify(result);
+      }
+      if (schema.name === 'milkcoo_app_pet_interrupt') return await requestPetInterrupt(this.host, this.id, this.context.botDir, input, call, this.petInterrupts);
+      if (schema.name === 'milkcoo_app_sticker_stats') {
+        this.stickerLibrary ??= new SharedStickerLibrary(this.context);
+        const s = this.stickerLibrary.stats(input.limit ?? 20);
+        const lines = s.recent.map(m => `- [表情包:${m.file}] ${m.label}（情感:${m.emotion} / 用处:${m.usage}${m.tag ? ' / 标签:' + m.tag : ''} / 出现${m.count ?? 1}次）`);
+        const byEmo = Object.entries(s.byEmotion).map(([k, v]) => `${k}:${v}`).join('，') || '无';
+        return `手机与 Coo 共用表情包库共 ${s.total} 张；情感分布：${byEmo}\n可用列表：\n${lines.join('\n') || '（暂无）'}`;
+      }
+      if (schema.name === 'milkcoo_app_status') {
+        const device = input.device_id === undefined ? undefined : text(input.device_id, 'device_id', 128);
+        return JSON.stringify({ ...this.store.status(device), listening: this.address(), last_error: this.lastError });
+      }
+      if (schema.name === 'milkcoo_app_read_screen') {
+        const native = await this.nativeFrame('screen', input, call); if (native) return native;
+        const device = input.device_id === undefined ? (this.screenFrames.size === 1 ? this.screenFrames.keys().next().value : undefined) : text(input.device_id, 'device_id', 128);
+        if (!device) return { text: JSON.stringify({ ok: false, error: 'SPECIFY_DEVICE', devices: [...this.screenFrames.keys()] }), failed: true };
+        const frame = this.screenFrames.get(device);
+        if (!frame) return { text: '该手机没有开启屏幕共享或尚未送来画面。', failed: true };
+        if (!await this.canAcceptImage()) return { text: '当前模型未启用图片输入能力，暂无法直接读取该屏幕画面。', failed: true };
+        return { text: `手机屏幕截图，device_id=${JSON.stringify(device)}，采集时间 ${frame.captured_at}。`,
+          blobs: [{ bytes: frame.bytes, mime: 'image/jpeg', name: 'phone-screen.jpg', fallbackText: '手机屏幕截图。' }] };
+      }
+      if (schema.name === 'milkcoo_app_read_camera' || schema.name === 'milkcoo_app_camera_control' || schema.name === 'milkcoo_app_camera_say') {
+        if (schema.name === 'milkcoo_app_read_camera') { const native = await this.nativeFrame('camera', input, call); if (native) return native; }
+        const live = [...this.cameraSessions.entries()].filter(([, session]) => Date.now() - session.last_seen < 30000);
+        const device = input.device_id === undefined ? (live.length === 1 ? live[0][0] : undefined) : text(input.device_id, 'device_id', 128);
+        if (!device) return { text: JSON.stringify({ ok: false, error: 'SPECIFY_DEVICE', devices: live.map(([id]) => id) }), failed: true };
+        const session = this.cameraSessions.get(device);
+        if (!session || Date.now() - session.last_seen >= 30000) return { text: '手机摄像头未开启或连接已过期。', failed: true };
+        if (schema.name === 'milkcoo_app_camera_say') {
+          if (call.signal?.aborted) throw new MobileError('CALL_CANCELLED');
+          if (!call.callId) throw new MobileError('STABLE_CALL_ID_REQUIRED');
+          const id = `camera-reply-${createHash('sha256').update(JSON.stringify([this.context.botDir, call.role, call.callId])).digest('hex')}`;
+          const existing = this.store.get(id);
+          const { record } = this.store.insert({ id, device_id: device, text: text(input.text, 'text'),
+            source_ref: `camera-session:${session.session_id}`, created_at: existing?.created_at ?? new Date().toISOString() }, 'assistant_message');
+          return JSON.stringify({ id: record.id, server_seq: record.server_seq, state: 'queued_for_phone', phone_read: 'unknown' });
+        }
+        if (schema.name === 'milkcoo_app_camera_control') {
+          if (call.signal?.aborted) throw new MobileError('CALL_CANCELLED');
+          const patch = cameraSettings(input, true);
+          if (!Object.keys(patch).length) return JSON.stringify({ ok: true, ...session.config, revision: session.revision });
+          session.config = { ...session.config, ...patch }; session.revision++;
+          return JSON.stringify({ ok: true, ...session.config, revision: session.revision });
+        }
+        if (!session.frame) return { text: '手机摄像头已开启，但尚未收到画面。', failed: true };
+        if (!await this.canAcceptImage()) return { text: '当前模型未启用图片输入能力，暂无法直接读取该摄像头画面。', failed: true };
+        return { text: `手机摄像头画面，device_id=${JSON.stringify(device)}，采集时间 ${session.frame.captured_at}。`,
+          blobs: [{ bytes: session.frame.bytes, mime: 'image/jpeg', name: 'phone-camera.jpg', fallbackText: '手机摄像头画面。' }] };
+      }
+      if (call.signal?.aborted) throw new MobileError('CALL_CANCELLED');
+      if (!call.callId) throw new MobileError('STABLE_CALL_ID_REQUIRED');
+      const device = text(input.device_id, 'device_id', 128);
+      const sourceId = text(input.in_reply_to, 'in_reply_to', 160);
+      const source = this.store.get(sourceId);
+      if (!source || source.kind !== 'user_message' || source.device_id !== device) throw new MobileError('PHONE_MESSAGE_NOT_FOUND', 404);
+      const replyId = `reply-${createHash('sha256').update(JSON.stringify([this.context.botDir, call.role, call.callId])).digest('hex')}`;
+      let sourceRef;
+      let messageText = input.text;
+      if (schema.name === 'milkcoo_app_send_media') {
+        const attachment = this.host.blob(text(input.handle, 'handle', 512));
+        if (!attachment) throw new MobileError('BLOB_NOT_FOUND', 404);
+        const bytes = Buffer.from(attachment.bytes);
+        if (!mediaMime(attachment.mime) || bytes.length < 1 || bytes.length > MEDIA_LIMIT) throw new MobileError('MEDIA_UNSUPPORTED');
+        const fileName = mediaName(input.file_name ?? (typeof attachment.name === 'string' ? attachment.name.split(/[\\/]/).at(-1) || null : null));
+        this.store.putMedia(replyId, device, attachment.mime, createHash('sha256').update(bytes).digest('hex'), bytes, fileName);
+        sourceRef = `coo-media:${replyId}`;
+        messageText = typeof input.text === 'string' && input.text.trim() ? input.text : (attachment.mime.startsWith('image/') ? '[图片]' : attachment.mime.startsWith('audio/') ? '[语音]' : `[附件]${fileName ? ' ' + fileName : ''}`);
+      }
+      const existing = this.store.get(replyId);
+      const { record } = this.store.insert({ id: replyId, device_id: device, text: text(messageText, 'text'), source_ref: sourceRef,
+        in_reply_to: sourceId, created_at: existing?.created_at ?? new Date().toISOString() }, 'assistant_message');
+      return JSON.stringify({ id: record.id, server_seq: record.server_seq, state: 'queued_for_phone', phone_read: 'unknown' });
+    } catch (error) {
+      return { text: JSON.stringify({ ok: false, error: error instanceof MobileError ? error.message : 'MOBILE_INTERNAL_ERROR' }), failed: true };
+    }
   }
   address() {
     const address = this.server?.address();
@@ -446,11 +572,22 @@ export class TinaMobileWorld {
       if (this.context.secret(secretName) !== token) throw new Error('MOBILE_SECRET_READBACK_FAILED');
     }
     this.tokenHash = createHash('sha256').update(`Bearer ${token}`).digest();
+    this.ecosystem = new EcosystemSessions({ context: typeof this.context.storeSecret === 'function' ? this.context : {} });
+    registerEcosystemProviders(this.ecosystem, this.context);
+    const hostFfaAccount = createCooDockFfaAccount(this.context.hostServices);
+    this.ffaAccount = hostFfaAccount ?? createStandaloneFfaAccount(this.context);
+    void this.ffaAccount?.refresh().catch(() => {});
+    this.frontends = new ServiceFrontends().register('bottle', { invoke: async ({ method, path, body }) => {
+      if (!this.bottleBridge) this.bottleBridge = new BottleBridge(this.modelControl);
+      try { return { status: 200, body: await this.bottleBridge.invoke(method, path, body) }; }
+      catch (error) { return { status: error.status ?? 503, body: { error: error.message, message: error.message } }; }
+    } });
     this.workbenchBridge = new WorkbenchBridge(this.context, token);
     this.panelNonce = randomBytes(24).toString('base64url');
     const dataDir = join(this.context.dataDir, LEGACY_WORLD_ID);
     mkdirSync(dataDir, { recursive: true });
     this.store = new MobileStore(join(dataDir, 'mobile.sqlite'));
+    this.petTransfer = new PetTransfer(join(dataDir, 'pet-transfer'));
     this.nativeDevices = new NativeDeviceChannel(this.store);
     this.stickerLibrary = new SharedStickerLibrary(this.context);
     this.host = host; this.modelControl = new ModelControl(this.context); this.desktopScreen = new DesktopScreenSampler(host, this.context, undefined, () => this.canAcceptImage()); this.lastError = null; this.dispatchRequested = false;
@@ -473,10 +610,33 @@ export class TinaMobileWorld {
       this.server = null; this.host = null; this.store.close(); this.store = null; throw error;
     }
     server.on('error', error => { this.lastError = error.code ?? 'HTTP_SERVER_ERROR'; });
+    if (this.context.botDir && this.ffaAccount) {
+      try {
+        this.starpostLan = new CooDockStarpostLan(this, dataDir, this.context.botDir);
+        await this.starpostLan.start();
+      } catch {
+        await this.starpostLan?.close();
+        this.starpostLan = null;
+        this.lastError = 'STARPOST_LAN_UNAVAILABLE';
+      }
+    }
+    if (this.starpostLan) {
+      try {
+        this.dockChannel = new CooDockCloudChannel(this.starpostLan, this.context, hostFfaAccount);
+        this.dockChannel.start();
+      } catch {
+        this.lastError = 'DOCK_CLOUD_CONFIGURATION_INVALID';
+      }
+    }
     const bound = this.address();
     const local = bound.host === '0.0.0.0' ? '127.0.0.1' : bound.host === '::' ? '::1' : bound.host;
     const localOrigin = `http://${local.includes(':') ? `[${local}]` : local}:${bound.port}`;
-    this.publicRelay = new PublicRelayConnector(this.context, () => ({ origin: localOrigin, token }));
+    this.publicRelay = new PublicRelayConnector(this.context, () => ({ origin: localOrigin, token }), fetch,
+      input => {
+        if (!this.bottleBridge) this.bottleBridge = new BottleBridge(this.modelControl);
+        if (!this.bottleTransfer) this.bottleTransfer = new BottleTransfer(this.bottleBridge);
+        return this.bottleTransfer.call(input);
+      });
     this.publicRelay.worldChatListener = new WorldChatListener(this.publicRelay, () => this.server && this.host, this.id);
     this.publicRelay.start();
     try {
@@ -496,7 +656,8 @@ export class TinaMobileWorld {
           { id: 'camera', label: '镜头观察 (前后摄采样)', builtin: 'camera', enabled: false },
           { id: 'audio', label: '麦克风与语音中继', builtin: 'audio', enabled: false },
           { id: 'bottle', label: '漂流瓶 (海边信箱)', builtin: 'bottle', enabled: true },
-          { id: 'starpost', label: '星邮与公网 World', builtin: 'public_worlds', enabled: true },
+          { id: 'starpost', label: '星邮', builtin: 'ecosystem', enabled: true },
+          { id: 'bloom', label: '花语乡', builtin: 'ecosystem', enabled: true },
         ],
       };
       this.personalApk = addBootstrap(readFileSync(apkPath), bootstrap);
@@ -507,13 +668,24 @@ export class TinaMobileWorld {
     this.timer = setInterval(() => this.kick(), 2000); this.timer.unref();
   }
   async stop() {
-    const server = this.server; this.server = null;
-    const relayClosed = this.publicRelay?.stop(); this.publicRelay = null;
     this.dispatchRequested = false;
     clearInterval(this.timer);
+    for (const { timer } of this.petTouchBuffers.values()) clearTimeout(timer);
+    this.petTouchBuffers.clear();
+    this.petTouchFlushes.clear();
+    const cloudClosed = this.dockChannel?.stop();
+    this.dockChannel = null;
+    const lan = this.starpostLan;
+    this.starpostLan = null;
+    const lanClosed = lan?.close();
+    const transferClosed = this.petTransfer?.close(); this.petTransfer = null;
+    const server = this.server; this.server = null;
+    const relayClosed = this.publicRelay?.stop(); this.publicRelay = null;
+    this.bottleTransfer?.close(); this.bottleTransfer = null;
     const close = server ? new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }) : Promise.resolve();
-    await this.pending; await relayClosed; await close; await this.desktopScreen?.stop(); this.desktopScreen = null; this.modelControl = null;
+    await this.pending; await cloudClosed; await lanClosed; await relayClosed; await close; await transferClosed; await this.desktopScreen?.stop(); this.desktopScreen = null; this.modelControl = null;
     this.host = null; this.store?.close(); this.store = null; this.tokenHash = null; this.personalApk = null; this.panelNonce = null; this.mobileEndpoint = null; this.bottleBridge = null; this.workbenchBootstrap = null; this.pairing.clear(); this.screenFrames.clear(); this.cameraSessions.clear();
+    this.ecosystem?.clearHandoffs(); this.ecosystem = null; this.frontends = null; this.ffaAccount = null;
   }
   onRunPhase(phase) { this.runPhase = phase; }
   kick() {
@@ -531,20 +703,31 @@ export class TinaMobileWorld {
     for (const record of this.store.pending()) {
       if (!this.server || !this.host) break;
       const touch = record.kind === 'pet_touch';
+      const realMessage = !touch && !record.id.startsWith('idle-wake-') && record.device_id !== 'idle-wake-daemon';
       const eventType = touch ? 'coo_mobile.pet_touch' : 'coo_mobile.message';
       const find = (source) => this.host.store.range({ source, senderKey: record.id, limit: 2 }).find(item =>
         item.type === eventType && item.meta?.device_id === record.device_id && item.meta?.message_id === record.id);
       // An old push may have stored the event before SQLite received its cursor.
       let event = find(this.id) ?? find(LEGACY_WORLD_ID);
+      if (touch && !event && this.petTouchWindowMs > 0) {
+        this.bufferPetTouch(record);
+        continue;
+      }
+      if (realMessage && !event && (this.petTouchBuffers.has(record.device_id) || this.petTouchFlushes.has(record.device_id))) {
+        await this.flushPetTouches(record.device_id);
+        if (!this.server || !this.host) break;
+      }
+      const trigger = touch ? 'piggyback' : realMessage && this.context.cfg.interruptOnUserMessage !== false ? 'interrupt' : 'flush';
       const media = record.source_ref?.startsWith('coo-media:') ? this.store.getMedia(record.id) : null;
       if (!event) event = await this.host.pushEvent({ source: this.id, type: eventType, origin: 'external',
         ts: record.created_at, senderKey: record.id,
         text: `[${touch ? '手机桌宠互动' : '手机输入'} device_id=${JSON.stringify(record.device_id)} message_id=${JSON.stringify(record.id)}]\n${record.text}`,
         meta: { device_id: record.device_id, message_id: record.id, ...(touch ? { touch: record.source_ref?.slice('pet-touch:'.length) } : {}) },
         ...(media ? { blobs: [{ bytes: Buffer.from(media.data), mime: media.mime, name: media.file_name ?? record.id,
-          fallbackText: `手机附件 ${record.id} (${media.mime})；若模型不支持该类型，请使用相应识别工具，不要猜测内容。` }] } : {}) }, { trigger: touch ? 'piggyback' : 'flush' });
+          fallbackText: `手机附件 ${record.id} (${media.mime})；若模型不支持该类型，请使用相应识别工具，不要猜测内容。` }] } : {}) }, { trigger });
       this.store.setHostCursor(record.id, event.cursor);
       if (event.contextDelivery === 'archive-only') this.store.settle(record.id, 'discarded', '通道隐藏，仅归档未进入对话');
+      else if (touch && this.petTouchWindowMs > 0) this.store.settle(record.id, 'delivered', '桌宠互动已投递至宿主');
     }
     this.lastError = null;
   }
@@ -555,12 +738,152 @@ export class TinaMobileWorld {
         const session = this.cameraSessions.get(event.meta?.device_id);
         if (session?.session_id === event.meta?.session_id && session.pending_event === event.meta?.camera_event_id) session.pending_event = null;
       }
-      if (event.source === this.id && ['coo_mobile.message', 'coo_mobile.pet_touch'].includes(event.type)) this.store.settle(event.meta?.message_id ?? event.senderKey, outcome);
+      if (event.source === this.id && !event.meta?.summary && ['coo_mobile.message', 'coo_mobile.pet_touch'].includes(event.type)) this.store.settle(event.meta?.message_id ?? event.senderKey, outcome);
     }
   }
-  async handle(req, res) {
+  get petTouchWindowMs() { return this.context.cfg.petTouchWindowMs ?? PET_TOUCH_WINDOW_MS; }
+  bufferPetTouch(record) {
+    const { device_id: deviceId, id, created_at } = record;
+    const kind = record.source_ref?.slice('pet-touch:'.length) || record.text;
+    const label = Object.hasOwn(petTouchLabels, kind) ? petTouchLabels[kind][1] : record.text;
+    let buffer = this.petTouchBuffers.get(deviceId);
+    if (!buffer) {
+      const timer = setTimeout(() => { void this.flushPetTouches(deviceId); }, this.petTouchWindowMs);
+      timer.unref();
+      buffer = { items: [], timer };
+      this.petTouchBuffers.set(deviceId, buffer);
+    }
+    buffer.items.push({ id, kind, label, created_at });
+    try { this.store.settle(id, 'delivered', '桌宠互动已纳入聚合窗口'); }
+    catch (error) {
+      buffer.items.pop();
+      if (!buffer.items.length) {
+        clearTimeout(buffer.timer);
+        this.petTouchBuffers.delete(deviceId);
+      }
+      throw error;
+    }
+    if (buffer.items.length >= (this.context.cfg.petTouchMaxBatch ?? PET_TOUCH_MAX_BATCH)) void this.flushPetTouches(deviceId);
+  }
+  flushPetTouches(deviceId) {
+    const buffer = this.petTouchBuffers.get(deviceId);
+    const previous = this.petTouchFlushes.get(deviceId);
+    if (!buffer) return previous;
+    clearTimeout(buffer.timer);
+    this.petTouchBuffers.delete(deviceId);
+    const { items } = buffer;
+    const host = this.host;
+    const flush = Promise.resolve(previous).then(() => {
+      if (!this.server || !host || this.host !== host) return;
+      return host.pushEvent({ source: this.id, type: 'coo_mobile.pet_touch', origin: 'external',
+        ts: items.at(-1).created_at, contextDelivery: 'deliver', wakeOnRestart: false,
+        text: formatPetTouchSummary(deviceId, items),
+        meta: { device_id: deviceId, count: items.length, summary: true } }, { trigger: 'piggyback' });
+    }).catch(error => {
+      host?.log?.warn('手机桌宠互动汇总投递失败', { err: error.message });
+    }).finally(() => {
+      if (this.petTouchFlushes.get(deviceId) === flush) this.petTouchFlushes.delete(deviceId);
+    });
+    this.petTouchFlushes.set(deviceId, flush);
+    return flush;
+  }
+  recordPetTouch(body) {
+    const kind = text(body?.kind, 'kind', 20);
+    if (!Object.hasOwn(petTouchLabels, kind)) throw new MobileError('INVALID_TOUCH_KIND');
+    const input = messageInput({ ...body, text: petTouchLabels[kind][0] });
+    input.source_ref = `pet-touch:${kind}`;
+    const { inserted, record } = this.store.insert(input, 'pet_touch');
+    if (inserted && this.petTouchWindowMs > 0) {
+      this.bufferPetTouch(record);
+      return { inserted, acknowledgement: this.store.ack(this.store.get(record.id)) };
+    }
+    if (inserted) this.kick();
+    return { inserted, acknowledgement: this.store.ack(record) };
+  }
+
+  async handle(req, res, scopedLan = false) {
     if (!this.server || !this.store) throw new MobileError('MOBILE_STOPPED', 503);
     const url = new URL(req.url, 'http://localhost');
+    if (url.pathname === '/_coo/dock-cloud-auth') {
+      if (!localControlRequest(req, this.address().port)) throw new MobileError('LOCAL_CONTROL_ONLY', 403);
+      if (req.method !== 'POST') throw new MobileError('METHOD_NOT_ALLOWED', 405);
+      if (req.headers['x-coo-panel'] !== this.panelNonce || req.headers.origin !== 'http://' + req.headers.host.toLowerCase())
+        throw new MobileError('PANEL_UNAUTHORIZED', 403);
+      const input = await readJson(req, 16384);
+      const cloud = this.dockChannel;
+      if (input?.action === 'status') {
+        const deployment = this.starpostLan?.deployment;
+        send(res, 200, { cloud: cloud?.status() ?? { state: 'unavailable' },
+          handshakeBotId: deployment?.expiresAt > Date.now() ? deployment.botId : null,
+          canManageHost: Boolean(cloud?.account?.canManage) }); return;
+      }
+      if (!cloud) throw new MobileError('DOCK_CLOUD_UNAVAILABLE', 503);
+      if (input?.action === 'beginProof') { send(res, 200, cloud.proofLink()); return; }
+      if (input?.action === 'completeProof') { send(res, 200, await cloud.loginWithProof(input.proof)); return; }
+      if (input?.action === 'logout') { send(res, 200, await cloud.logoutCloud()); return; }
+      throw new MobileError('DOCK_CLOUD_ACTION_UNKNOWN', 400);
+    }
+    if (['/_coo/starpost-hub', '/_coo/starpost-pair', '/_coo/install-starpost.apk'].includes(url.pathname)) {
+      if (!localControlRequest(req, this.address().port)) throw new MobileError('LOCAL_CONTROL_ONLY', 403);
+      const template = starpostTemplate(this.context.cfg.starpostApk);
+      if (req.method === 'GET' && url.pathname === '/_coo/starpost-hub') {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY',
+          'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'" });
+        res.end(starpostHubPanel(this.panelNonce, template, this.starpostLan?.identity)); return;
+      }
+      if (req.method !== 'POST' || url.pathname === '/_coo/starpost-hub') throw new MobileError('METHOD_NOT_ALLOWED', 405);
+      if (req.headers.origin !== 'http://' + req.headers.host.toLowerCase()) throw new MobileError('PANEL_UNAUTHORIZED', 403);
+      const printing = url.pathname === '/_coo/install-starpost.apk';
+      let nonce = req.headers['x-coo-panel'];
+      if (printing) {
+        if (!req.headers['content-type']?.startsWith('application/x-www-form-urlencoded')) throw new MobileError('INVALID_FORM', 400);
+        let body = '';
+        for await (const chunk of req) {
+          body += chunk;
+          if (body.length > 2048) throw new MobileError('BODY_TOO_LARGE', 413);
+        }
+        nonce = new URLSearchParams(body).get('nonce');
+      }
+      if (nonce !== this.panelNonce)
+        throw new MobileError('PANEL_UNAUTHORIZED', 403);
+      if (printing && !template) throw new MobileError('STARPOST_APK_TEMPLATE_MISSING', 404);
+      const identity = this.starpostLan?.identity;
+      if (!identity || !this.starpostLan.issuePair) throw new MobileError('请先启动并认证同一 Bot 的星邮 World', 503);
+      const account = await this.ffaAccount?.refresh().catch(() => null);
+      if (account?.status !== 'ready' || account.serviceStatus !== 'ready') throw new MobileError('请先确认桌面 FFA Hub 登录和 CooDock 业务号', 403);
+      const grant = await this.starpostLan.issuePair().catch(() => { throw new MobileError('未能取得部署端配对票据，请确认 FFA Hub 授权与星邮连接', 503); });
+      const bot = { ...identity, botName: grant.botName || identity.botName };
+      const pair = starpostPairResult(bot, grant, this.starpostLan?.current(identity.botId));
+      if (printing) {
+        const apk = addBootstrap(readFileSync(template), pair.bootstrap);
+        res.writeHead(200, { 'content-type': 'application/vnd.android.package-archive', 'content-disposition': 'attachment; filename="Starpost-CooDock.apk"',
+          'cache-control': 'no-store', 'content-length': apk.length });
+        res.end(apk); return;
+      }
+      send(res, 200, { botId: bot.botId, botName: bot.botName, uri: pair.uri, expiresAt: pair.expiresAt, svg: pair.svg }); return;
+    }
+    if (url.pathname === '/_coo/ecosystem' || url.pathname === '/_coo/ecosystem-control') {
+      if (!localControlRequest(req, this.address().port)) throw new MobileError('LOCAL_CONTROL_ONLY', 403);
+      if (url.pathname === '/_coo/ecosystem' && req.method === 'GET') {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY',
+          'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'" });
+        res.end(ecosystemPanel(this.ecosystem.catalog(), this.panelNonce, this.ffaAccount)); return;
+      }
+      if (req.method !== 'POST' || req.headers['x-coo-panel'] !== this.panelNonce || req.headers.origin !== `http://${req.headers.host.toLowerCase()}`)
+        throw new MobileError('PANEL_UNAUTHORIZED', 403);
+      const input = await readJson(req, 65536);
+      try {
+        if (input.method === 'ffaHub') {
+          if (!this.ffaAccount) throw new MobileError('FFA_HOST_LOGIN_UNCONFIGURED', 404);
+          const result = await this.ffaAccount.control(input.input?.action, input.input?.businessId);
+          if (this.context.hostServices?.get('ffa-hub.login') && result.serviceStatus === 'ready' &&
+              ['complete', 'choose'].includes(input.input?.action)) await this.dockChannel?.useHostLogin();
+          send(res, 200, result);
+        } else send(res, 200, await this.ecosystem.invoke(input.method, input.input));
+      }
+      catch (error) { send(res, error.status ?? 500, { error: error.message }); }
+      return;
+    }
     if (url.pathname === '/_coo/world-chat' && ['GET', 'POST'].includes(req.method)) {
       if (!localControlRequest(req, this.address().port)) throw new MobileError('LOCAL_CONTROL_ONLY', 403);
       const relay = this.publicRelay;
@@ -610,7 +933,9 @@ export class TinaMobileWorld {
       try {
         const template = variant === 'workbench' ? workbenchApkPath : apkPath;
         if (!existsSync(template)) throw new Error('APP_NOT_AVAILABLE');
-        const bytes = addBootstrap(readFileSync(template), { relay: { origin: PUBLIC_RELAY_ORIGIN, key } });
+        const handoff = this.ecosystem.createBootstrapHandoff();
+        const bytes = addBootstrap(readFileSync(template), { relay: { origin: PUBLIC_RELAY_ORIGIN, key },
+          ecosystem: { version: 1, services: this.ecosystem.catalog().services, ...(handoff ? { handoff } : {}) } });
         await relay.bind(key);
         res.writeHead(200, { 'content-type': 'application/vnd.android.package-archive',
           'content-disposition': `attachment; filename="CooDock-${variant}-relay-personal.apk"`,
@@ -721,12 +1046,27 @@ export class TinaMobileWorld {
           bootstrap = { ...bootstrap, preloadedWorlds: merged };
         }
       } catch { /* Keep built-in preloaded worlds if live desktop query is unavailable. */ }
+      const handoff = this.ecosystem.createBootstrapHandoff();
+      bootstrap = { ...bootstrap, ecosystem: { version: 1, services: this.ecosystem.catalog().services, ...(handoff ? { handoff } : {}) } };
       const bytes = addBootstrap(readFileSync(full ? workbenchApkPath : apkPath), bootstrap);
       res.writeHead(200, { 'content-type': 'application/vnd.android.package-archive', 'content-disposition': `attachment; filename="CooDock-${full ? 'workbench-' : ''}personal.apk"`, 'cache-control': 'no-store', 'content-length': bytes.length });
       res.end(bytes); return;
     }
-    const auth = createHash('sha256').update(String(req.headers.authorization ?? '')).digest();
-    if (!timingSafeEqual(auth, this.tokenHash)) throw new MobileError('UNAUTHORIZED', 401);
+    if (!scopedLan) {
+      const auth = createHash('sha256').update(String(req.headers.authorization ?? '')).digest();
+      if (!timingSafeEqual(auth, this.tokenHash)) throw new MobileError('UNAUTHORIZED', 401);
+    }
+    if (req.method === 'GET' && url.pathname === '/v1/ecosystem/frontends') { send(res, 200, frontendManifest); return; }
+    if (req.method === 'POST' && url.pathname === '/v1/ecosystem/invoke') {
+      const result = await this.frontends.invoke(await readJson(req, 1024 * 1024));
+      send(res, result.status, result.body); return;
+    }
+    if (url.pathname === '/v1/ecosystem' || url.pathname.startsWith('/v1/ecosystem/')) {
+      const result = await dispatchEcosystemRequest(this.ecosystem, req.method, url.pathname,
+        req.method === 'GET' ? Object.fromEntries(url.searchParams) : await readJson(req, 65536));
+      if (!result) throw new MobileError('NOT_FOUND', 404);
+      send(res, result.status, result.body); return;
+    }
     if (req.method === 'GET' && url.pathname === '/v1/console-entry') {
       try { send(res, 200, consoleEntry(this.context.cfg.consoleUiUrl)); }
       catch { throw new MobileError('CONSOLE_UI_URL_INVALID'); }
@@ -773,6 +1113,10 @@ export class TinaMobileWorld {
       send(res, 200, await figureOperation(this.context.cfg.petPort ?? 7797, target, await readJson(req))); return;
     }
     if (req.method === 'GET' && url.pathname === '/v1/pet/resource') {
+      if (url.searchParams.get('transfer') === 'chunks') {
+        send(res, 200, await this.petTransfer.chunk(this.context.cfg.petPort ?? 7797,
+          url.searchParams.get('path'), Number(url.searchParams.get('offset') ?? 0), url.searchParams.get('revision') ?? '')); return;
+      }
       const resource = await readPetResource(this.context.cfg.petPort ?? 7797, url.searchParams.get('path'));
       res.writeHead(200, { 'content-type': resource.mime, 'content-length': resource.bytes.length, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
       res.end(resource.bytes); return;
@@ -791,7 +1135,8 @@ export class TinaMobileWorld {
       // Existing Android versions use the old source for deduplication and notification rules.
       const events = to > after ? this.host.store.range({ fromCursor: after + 1, toCursor: to }).map(event =>
         event.source === WORLD_ID ? { ...event, source: LEGACY_WORLD_ID } : event) : [];
-      send(res, 200, { server_id: this.store.serverId, events, next_cursor: to, latest, phase: this.runPhase ?? null }); return;
+      const visible = scopedLan ? events.flatMap(petMirror) : events;
+      send(res, 200, { server_id: this.store.serverId, events: visible, next_cursor: to, latest, phase: this.runPhase ?? null }); return;
     }
     if (req.method === 'GET' && url.pathname === '/v1/worlds') {
       const value = await this.modelControl.request('/api/worlds', undefined, 5000);
@@ -1006,14 +1351,8 @@ export class TinaMobileWorld {
       send(res, 200, { ok: true, model_accepts_image: accepts, proactive_delivered: delivered }); return;
     }
     if (req.method === 'POST' && url.pathname === '/v1/pet/touch') {
-      const body = await readJson(req);
-      const kind = text(body?.kind, 'kind', 20);
-      const labels = { poke: '戳了戳手机上的小人', pet: '摸了摸手机上的小人', grab: '拿起了手机上的小人', drop: '放下了手机上的小人', throw: '抛了一下手机上的小人', crash: '手机上的小人碰到了边界' };
-      if (!Object.hasOwn(labels, kind)) throw new MobileError('INVALID_TOUCH_KIND');
-      const input = messageInput({ ...body, text: labels[kind] }); input.source_ref = `pet-touch:${kind}`;
-      const result = this.store.insert(input, 'pet_touch');
-      send(res, result.inserted ? 201 : 200, this.store.ack(result.record));
-      if (result.inserted) this.kick();
+      const { inserted, acknowledgement } = this.recordPetTouch(await readJson(req));
+      send(res, inserted ? 201 : 200, acknowledgement);
       return;
     }
     if (req.method === 'POST' && url.pathname === '/v1/media') {
@@ -1067,7 +1406,8 @@ export class TinaMobileWorld {
 
 export default {
   id: WORLD_ID, label: WORLD_LABEL,
-  defaults: () => ({ enabled: false, host: '0.0.0.0', port: 7801, advertiseHost: 'auto', petPort: 7797, consolePort: 17788, tokenSecret: 'MILKCOO_APP_TOKEN' }),
+  defaults: () => ({ enabled: false, host: '0.0.0.0', port: 7801, advertiseHost: 'auto', petPort: 7797, consolePort: 17788, tokenSecret: 'MILKCOO_APP_TOKEN',
+    petTouchWindowMs: PET_TOUCH_WINDOW_MS, petTouchMaxBatch: PET_TOUCH_MAX_BATCH, interruptOnUserMessage: true }),
   create(context) {
     migrateWorldIdentity(context);
     return new TinaMobileWorld(context);

@@ -17,3 +17,10 @@ distributed under Apache License 2.0. Its underlying QRCode for JavaScript
 implementation is copyright Kazuhiko Arase and licensed under the MIT license.
 Both license texts and source notices are included under
 `src/vendor/qrcode-terminal/`. No pairing information is sent to a QR service.
+
+
+## Starpost native Android frontend (0.6.0-dev.1)
+
+The preloaded Android Starpost frontend is adapted from hth768/cortico-world-starpost, commit eff2d7704e33d7ffacca5406065f1c495daef134 (Android 1.10.3), under MIT. Original copyright and license are retained at Android assets/licenses/starpost-MIT.txt and in the source starpost/LICENSE.starpost.txt. Source mapping is in starpost/UPSTREAM-SOURCES.json.
+
+Project Bloom game artwork and server data are not redistributed. Its entry is an author-supplied native frontend slot. The Bottle native module calls the existing Bottle World API; coverage is documented in the author guide.

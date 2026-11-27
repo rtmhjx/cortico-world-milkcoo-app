@@ -23,19 +23,19 @@ export class ModelControl {
     const effort = spec.thinking === false ? 'none' : spec.reasoningEffort ?? 'default';
     const deepseek = (() => { try { return new URL(detail.entry.baseUrl).hostname === 'api.deepseek.com'; } catch { return false; } })();
     // The public provider endpoint does not expose a supported tier catalog.
-    const tiers = [effort];
+    const tiers = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
     return {
       active_provider: list.active, selected_provider: id,
       providers: list.providers.map(p => ({ id: p.name, model: p.model, ready: p.readiness?.state === 'ready', active: p.active })),
       model: spec.model ?? '', effort, revision: detail.revision, multimodal: detail.entry.multimodal === true && !(deepseek && spec.model === 'deepseek-v4-pro'),
       models: models.map(m => ({ id: m.id, name: m.displayName ?? m.id })).filter(m => typeof m.id === 'string'),
-      efforts: [...new Set(['default', ...tiers, effort])], model_error: modelError,
+      efforts: [...new Set([...tiers, effort])], model_error: modelError,
     };
   }
-  async brief() {
-    const list = await this.request('/api/providers');
+  async brief(request = path => this.request(path), directory) {
+    const list = directory ?? await request('/api/providers');
     if (!list.active) return { active_provider: null, model: null, effort: null };
-    const detail = await this.request(`/api/providers/${encodeURIComponent(list.active)}`);
+    const detail = await request(`/api/providers/${encodeURIComponent(list.active)}`);
     const spec = detail.entry.spec ?? {};
     const deepseek = (() => { try { return new URL(detail.entry.baseUrl).hostname === 'api.deepseek.com'; } catch { return false; } })();
     return { active_provider: list.active, model: spec.model ?? '', effort: spec.thinking === false ? 'none' : spec.reasoningEffort ?? 'default', revision: detail.revision,
