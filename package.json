@@ -43,8 +43,8 @@
   "files": [
     "src",
     "client/Starpost.apk",
-    "client/CooDock-0.6.0-dev.15-companion-debug.apk",
-    "client/CooDock-0.6.0-dev.15-workbench-debug.apk",
+    "client/CooDock-0.6.0-beta.1-companion-debug.apk",
+    "client/CooDock-0.6.0-beta.1-workbench-debug.apk",
     "client/ModelPanel.html",
     "client/DevicePanel.html",
     "client/Android-Guide.html",

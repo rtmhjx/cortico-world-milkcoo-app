@@ -1,3 +1,9 @@
+# 0.6.0-beta.1 — unified 4-tab CooDock v71 client & dev.6 World contracts
+
+- Bundled fresh Android APKs (CooDock-0.6.0-beta.1-companion-debug.apk and CooDock-0.6.0-beta.1-workbench-debug.apk, package net.tina.coodock, versionCode 71, commit d1e87b0) with unified 4-tab shell, FFA Hub PR #1 auth, Bambu-style multi-agent switcher, and 3-zone editable Coo tab.
+- Aligned World backend with dev.6 contracts: lanEndpoint and hostLabel bootstrap preservation, /api/prompts/prefix, /api/worlds/visibility, /api/session/reload-prefix, and /api/worlds/activation status confirmation.
+- Replaced legacy dev.2 APK templates in client/ and synced public source to rtmhjx/cortico-world-milkcoo-app.
+
 # 0.6.0-dev.4-tina.3-native-v43
 
 Local undeployed candidate: restores fixed native management transactions, pins every host request to the current Bot deployment, retains configuration backup and verifies write readbacks. Does not publish or replace live state. Android templates retained from the original World are legacy templates, not the Starpost v43 base/split delivery.
